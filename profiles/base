@@ -4,3 +4,11 @@ arch=x86_64
 
 [conf]
 tools.build:skip_test=False
+
+[buildenv]
+{% if os.isatty(2) and os.getenv("NO_COLOR") is none and not os.getenv("CI") %}
+# Colored Ninja status line: bold blue [finished/total], bold percentage
+NINJA_STATUS={{ "\x1b[1;34m[%f/%t]\x1b[0m \x1b[1m%p \x1b[0m" }}
+# Ninja pipes compiler output, so gcc/clang drop colors unless CMake forces them
+CMAKE_COLOR_DIAGNOSTICS=ON
+{% endif %}
