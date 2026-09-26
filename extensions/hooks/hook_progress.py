@@ -40,6 +40,7 @@ def _enabled():
         return False
     try:
         from conan.api.output import LEVEL_STATUS
+
         return ConanOutput.level_allowed(LEVEL_STATUS)
     except ImportError:
         return True
@@ -68,7 +69,9 @@ class _Progress:
         now = time.monotonic()
         if not self._drawn and now - self._start < _SHOW_AFTER:
             return
-        if not force and now - self._last < (_TTY_INTERVAL if self._tty else _NON_TTY_INTERVAL):
+        if not force and now - self._last < (
+            _TTY_INTERVAL if self._tty else _NON_TTY_INTERVAL
+        ):
             return
         self._last = now
         line = f"{self._label} {text}"
@@ -97,14 +100,18 @@ class _ProgressFile(io.FileIO):
         super().__init__(path, "r" if "r" in mode else mode)
         self._size = os.path.getsize(path)
         self._read = 0
-        self._progress = _Progress(f"{label} {os.path.basename(path)}") if _enabled() else None
+        self._progress = (
+            _Progress(f"{label} {os.path.basename(path)}") if _enabled() else None
+        )
 
     def _report(self, n, force=False):
         self._read += n
         if self._progress:
             pct = min(100, int(self._read * 100 / self._size)) if self._size else 100
             bar = "#" * (pct // 5) + "-" * (20 - pct // 5)
-            self._progress.update(f"[{bar}] {pct:3d}% of {_human(self._size)}", force=force)
+            self._progress.update(
+                f"[{bar}] {pct:3d}% of {_human(self._size)}", force=force
+            )
 
     def read(self, size=-1):
         block = super().read(size)
@@ -127,8 +134,10 @@ class _ProgressFile(io.FileIO):
 
 # -- archives ------------------------------------------------------------------------------------
 
+
 def _patch_source_archives():
     import tarfile
+
     from conan.tools.files import files as files_mod
 
     if not hasattr(files_mod, "FileProgress") or not hasattr(files_mod, "untargz"):
@@ -149,10 +158,12 @@ def _patch_source_archives():
             return original_untargz(filename, *args, **kwargs)
         original_open = tarfile.TarFile.__dict__["open"]
         with _ProgressFile(filename, "Extracting") as fileobj:
+
             def open_(cls, name=None, mode="r", fileobj_=None, *a, **kw):
                 if name == filename and fileobj_ is None and "fileobj" not in kw:
                     fileobj_ = fileobj
                 return original_open.__func__(cls, name, mode, fileobj_, *a, **kw)
+
             tarfile.TarFile.open = classmethod(open_)
             try:
                 return original_untargz(filename, *args, **kwargs)
@@ -186,27 +197,38 @@ _GIT_PROGRESS = re.compile(r"^(remote: )?[A-Z][\w ]+:\s+\d+%")
 
 def _patch_git():
     import inspect
+
     from conan.api.output import Color
     from conan.errors import ConanException
     from conan.tools.files import chdir
     from conan.tools.scm import Git
 
     original_run = Git.run
-    if list(inspect.signature(original_run).parameters) != ["self", "cmd", "hidden_output"]:
+    if list(inspect.signature(original_run).parameters) != [
+        "self",
+        "cmd",
+        "hidden_output",
+    ]:
         return "Git.clone()"
 
     def run(self, cmd, hidden_output=None):
         sub, _, rest = cmd.partition(" ")
         if sub not in ("clone", "fetch") or not _enabled():
             return original_run(self, cmd, hidden_output)
-        print_cmd = cmd if hidden_output is None else cmd.replace(hidden_output, "<hidden>")
+        print_cmd = (
+            cmd if hidden_output is None else cmd.replace(hidden_output, "<hidden>")
+        )
         self._conanfile.output.info(f"RUN: git {print_cmd}", fg=Color.BRIGHT_BLUE)
         cf = self._conanfile
         who = cf.display_name or (f"{cf.name}/{cf.version}" if cf.name else "")
         progress = _Progress(f"{who}: git {sub}:" if who else f"git {sub}:")
         with chdir(self._conanfile, self.folder):
-            proc = subprocess.Popen(f"git {sub} --progress {rest}", shell=True,
-                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            proc = subprocess.Popen(
+                f"git {sub} --progress {rest}",
+                shell=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
             stdout = []
             reader = threading.Thread(target=lambda: stdout.append(proc.stdout.read()))
             reader.start()
@@ -225,8 +247,10 @@ def _patch_git():
             err = "\n".join(messages)
             if hidden_output:
                 err = err.replace(hidden_output, "<hidden>")
-            raise ConanException(f"Command 'git {print_cmd}' failed with errorcode "
-                                 f"'{proc.returncode}'\n{err}")
+            raise ConanException(
+                f"Command 'git {print_cmd}' failed with errorcode "
+                f"'{proc.returncode}'\n{err}"
+            )
         return b"".join(stdout).decode(errors="replace").strip()
 
     Git.run = run
@@ -234,6 +258,7 @@ def _patch_git():
 
 def _install():
     import conan.tools.files as files_pkg
+
     if getattr(files_pkg, _MARKER, False):
         return  # hooks can be loaded more than once per process
     setattr(files_pkg, _MARKER, True)
@@ -242,11 +267,13 @@ def _install():
         try:
             if failed := patch():
                 skipped.append(failed)
-        except Exception as e:  # never break conan because of progress output
+        except Exception as e:  # noqa: BLE001 - progress output must never break conan
             skipped.append(f"{patch.__name__} ({e})")
     if skipped:
-        ConanOutput().warning(f"[hook_progress] Conan internals changed, no progress for: "
-                              f"{', '.join(skipped)}")
+        ConanOutput().warning(
+            f"[hook_progress] Conan internals changed, no progress for: "
+            f"{', '.join(skipped)}"
+        )
 
 
 _install()

@@ -22,8 +22,9 @@ import time
 from conan.api.output import ConanOutput
 from conan.cli.command import conan_command
 
-CONFIG_REPO = os.environ.get("CONAN_CONFIG_SYNC_URL",
-                             "https://github.com/Awareness10/conan_config.git")
+CONFIG_REPO = os.environ.get(
+    "CONAN_CONFIG_SYNC_URL", "https://github.com/Awareness10/conan_config.git"
+)
 CONFIG_BRANCH = os.environ.get("CONAN_CONFIG_SYNC_BRANCH", "main")
 REV_FILENAME = ".conan_config_installed_rev"
 _SKIP_ENV = "CONAN_CONFIG_SYNC_SKIP"
@@ -31,7 +32,9 @@ _SKIP_ENV = "CONAN_CONFIG_SYNC_SKIP"
 
 def _conan_home():
     # Resolved without the Conan API: this runs while the CLI is still loading.
-    return os.environ.get("CONAN_HOME") or os.path.join(os.path.expanduser("~"), ".conan2")
+    return os.environ.get("CONAN_HOME") or os.path.join(
+        os.path.expanduser("~"), ".conan2"
+    )
 
 
 def _rev_file():
@@ -55,7 +58,10 @@ def _remote_rev():
     try:
         result = subprocess.run(
             ["git", "ls-remote", CONFIG_REPO, f"refs/heads/{CONFIG_BRANCH}"],
-            capture_output=True, text=True, timeout=5,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
             env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
         )
     except (OSError, subprocess.TimeoutExpired):
@@ -66,15 +72,31 @@ def _remote_rev():
 
 def _install(rev):
     """Run `conan config install` with the same interpreter and conan entry point."""
-    cmd = [sys.executable, sys.argv[0], "config", "install", CONFIG_REPO, "--type=git",
-           f"--args=-b {CONFIG_BRANCH}"]
-    sys.stderr.write(f"[INFO] Remote conan config has been updated, running "
-                     f"conan config install {CONFIG_REPO}\n")
-    result = subprocess.run(cmd, capture_output=True, text=True,
-                            env={**os.environ, _SKIP_ENV: "1"})
+    cmd = [
+        sys.executable,
+        sys.argv[0],
+        "config",
+        "install",
+        CONFIG_REPO,
+        "--type=git",
+        f"--args=-b {CONFIG_BRANCH}",
+    ]
+    sys.stderr.write(
+        f"[INFO] Remote conan config has been updated, running "
+        f"conan config install {CONFIG_REPO}\n"
+    )
+    result = subprocess.run(
+        cmd,
+        check=False,
+        capture_output=True,
+        text=True,
+        env={**os.environ, _SKIP_ENV: "1"},
+    )
     if result.returncode != 0:
         sys.stderr.write(result.stdout + result.stderr)
-        sys.stderr.write("[WARN] conan config install failed, continuing with the current config\n")
+        sys.stderr.write(
+            "[WARN] conan config install failed, continuing with the current config\n"
+        )
         return False
     _write_rev(rev)
     sys.stderr.write(f"[INFO] Conan config updated to {rev[:12]}\n")
@@ -105,7 +127,9 @@ def _auto_sync():
         return
     args = sys.argv[1:]
     # Don't fight an explicit install, and let `sync:config` do its own check.
-    if args[:2] in (["config", "install"], ["config", "install-pkg"]) or args[:1] == ["sync:config"]:
+    if args[:2] in (["config", "install"], ["config", "install-pkg"]) or args[:1] == [
+        "sync:config"
+    ]:
         return
     if sync() == "updated":
         # Re-run the original command in a fresh process so it loads the new config.
@@ -125,5 +149,7 @@ def config(conan_api, parser, *args):
     """
     parser.parse_args(*args)
     status = sync(force=True)
-    ConanOutput().info(f"Conan config ({CONFIG_REPO} @ {CONFIG_BRANCH}): {status}, "
-                       f"installed rev {(_read_rev() or 'none')[:12]}")
+    ConanOutput().info(
+        f"Conan config ({CONFIG_REPO} @ {CONFIG_BRANCH}): {status}, "
+        f"installed rev {(_read_rev() or 'none')[:12]}"
+    )

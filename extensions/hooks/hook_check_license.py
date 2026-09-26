@@ -3,4 +3,6 @@
 
 def pre_export(conanfile):
     if not getattr(conanfile, "license", None):
-        conanfile.output.warning(f"[hook_check_license] {conanfile.name}: recipe has no 'license' attribute")
+        conanfile.output.warning(
+            f"[hook_check_license] {conanfile.name}: recipe has no 'license' attribute"
+        )
