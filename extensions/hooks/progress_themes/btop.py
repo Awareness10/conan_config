@@ -1,6 +1,6 @@
 """btop-style meter: `■■■■■■····` with a per-cell color gradient, labels in muted colors.
 
-cmake/3.31.12 › unpacking conan_package.tgz  ■■■■■■■■■■■■  44%  18.9 MiB / 43.0 MiB  17.2 MiB/s  eta 00:01
+cmake/3.31.12 > unpacking conan_package.tgz  ■■■■■■■■■■■■  44%  18.9 MiB / 43.0 MiB  17.2 MiB/s  eta 00:01
 """
 
 from ._common import BOLD, Line, duration, gradient, human, rgb
@@ -15,7 +15,7 @@ def layout(st):
     grey = rgb(*_GREY)
     left = [(" ", None)]
     if st.scope:
-        left += [(st.scope, BOLD), (" › ", grey)]
+        left += [(st.scope, BOLD), (" > ", grey)]
     left += [(st.verb, grey), (" ", None), (st.name, rgb(*_NAME))]
     right = []
     if st.detail:
