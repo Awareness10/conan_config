@@ -12,6 +12,7 @@ Example Conan 2 configuration repo for testing `conan config install`.
 | `profiles/` | `base`, `linux-gcc-release`, `linux-gcc-debug`, `linux-clang-release`, `windows-msvc-release` |
 | `extensions/hooks/hook_check_license.py` | `pre_export` hook warning on missing `license` |
 | `extensions/commands/example/cmd_hello.py` | Custom command: `conan example:hello [name]` |
+| `extensions/commands/sync/cmd_config.py` | Auto-sync before every conan command + `conan sync:config` |
 | `.conanignore` | Files not copied into `CONAN_HOME` |
 
 ## Usage
@@ -27,3 +28,15 @@ conan profile list
 conan remote list
 conan example:hello
 ```
+
+## Auto-sync
+
+Once installed, every `conan` command first compares the remote `main` head
+(`git ls-remote`) with the last installed commit
+(`$CONAN_HOME/.conan_config_installed_rev`). If it moved, the config is
+reinstalled and the command re-runs with the new config. `conan sync:config`
+forces a check now.
+
+- `CONAN_CONFIG_SYNC_INTERVAL=<s>`: seconds between checks (default 1800, `0` = every command; a check costs ~0.4s)
+- `CONAN_CONFIG_SYNC_SKIP=1`: disable (CI, offline)
+- `CONAN_CONFIG_SYNC_URL` / `CONAN_CONFIG_SYNC_BRANCH`: use another repo/branch
