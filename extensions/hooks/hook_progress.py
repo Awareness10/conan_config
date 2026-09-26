@@ -223,28 +223,43 @@ class _Progress:
 
 
 class _ProgressFile(io.FileIO):
-    """Read-only file that reports how much of it has been read."""
+    """Read-only file that reports how far it has been read.
 
-    def __init__(self, path, verb, mode="rb"):
+    tarfile reads a compressed archive twice: extractall() first decompresses everything to
+    list the members, then rewinds and decompresses again to extract them. Pass passes=2 and
+    the bar covers both; a rewind from past the middle of the file starts the next pass.
+    """
+
+    def __init__(self, path, verb, mode="rb", passes=1):
         super().__init__(path, "r" if "r" in mode else mode)
         self._size = os.path.getsize(path)
-        self._read = 0
+        self._passes = passes
+        self._pass = 0
+        self._furthest = 0
         self._progress = _Progress(verb, os.path.basename(path)) if _enabled() else None
 
-    def _report(self, n):
-        self._read += n
-        if self._progress:
-            fraction = self._read / self._size if self._size else 1.0
-            self._progress.update(fraction, min(self._read, self._size), self._size)
+    def _report(self):
+        pos = self.tell()
+        self._furthest = max(self._furthest, pos)
+        if self._progress and self._size:
+            done = (min(self._pass, self._passes - 1) * self._size + pos) / self._passes
+            self._progress.update(min(done / self._size, 1.0), int(done), self._size)
+
+    def seek(self, offset, whence=io.SEEK_SET):
+        pos = super().seek(offset, whence)
+        if pos < self._furthest / 2 and self._furthest > self._size / 2:
+            self._pass += 1
+            self._furthest = pos
+        return pos
 
     def read(self, size=-1):
         block = super().read(size)
-        self._report(len(block))
+        self._report()
         return block
 
     def readinto(self, b):
         n = super().readinto(b)
-        self._report(n or 0)
+        self._report()
         return n
 
     def close(self):
@@ -279,7 +294,7 @@ def _patch_source_archives():
         if not _enabled():
             return original_untargz(filename, *args, **kwargs)
         original_open = tarfile.TarFile.__dict__["open"]
-        with _ProgressFile(filename, "extracting") as fileobj:
+        with _ProgressFile(filename, "extracting", passes=2) as fileobj:
 
             def open_(cls, name=None, mode="r", fileobj_=None, *a, **kw):
                 if name == filename and fileobj_ is None and "fileobj" not in kw:
@@ -327,7 +342,7 @@ def _patch_package_downloads():
         path = getattr(fileobj, "name", None)
         if not _enabled() or not isinstance(path, str) or not os.path.isfile(path):
             return original(fileobj, destination_dir)
-        with _ProgressFile(path, "unpacking") as f:
+        with _ProgressFile(path, "unpacking", passes=2) as f:
             return original(f, destination_dir)
 
     remote_manager.tar_extract = tar_extract
