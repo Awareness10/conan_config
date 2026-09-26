@@ -14,12 +14,14 @@ Environment variables:
     CONAN_CONFIG_SYNC_URL, CONAN_CONFIG_SYNC_BRANCH  override the repo/branch (testing, forks)
 """
 
+import itertools
 import os
 import subprocess
 import sys
 import time
 
-from conan.api.output import ConanOutput
+from colorama import Style
+from conan.api.output import Color, ConanOutput
 from conan.cli.command import conan_command
 
 CONFIG_REPO = os.environ.get(
@@ -28,6 +30,33 @@ CONFIG_REPO = os.environ.get(
 CONFIG_BRANCH = os.environ.get("CONAN_CONFIG_SYNC_BRANCH", "main")
 REV_FILENAME = ".conan_config_installed_rev"
 _SKIP_ENV = "CONAN_CONFIG_SYNC_SKIP"
+
+
+def _say(*parts):
+    """One pacman/paru-style line on stderr, e.g. `:: Message  main 26a77c8 -> 2aaaa88`.
+
+    Each part is plain text or (text, color); Conan decides whether colors are shown
+    (TTY, NO_COLOR, CLICOLOR_FORCE, CONAN_COLOR_DARK) and hides it all with -vquiet.
+    """
+    if _silenced():
+        return
+    out = ConanOutput()
+    for part in parts:
+        text, color = part if isinstance(part, tuple) else (part, None)
+        out.write(text, fg=color)
+    out.write("", newline=True)
+
+
+def _silenced():
+    # The auto-sync runs before Conan parses -v, so honour -vquiet/-verror/-vwarning here.
+    args = sys.argv[1:]
+    levels = {a[2:] for a in args if a.startswith("-v")}
+    levels |= {b for a, b in itertools.pairwise(args) if a == "-v"}
+    return bool(levels & {"quiet", "error", "warning"})
+
+
+def _short(rev):
+    return rev[:7] if rev else "none"
 
 
 def _conan_home():
@@ -72,6 +101,17 @@ def _remote_rev():
 
 def _install(rev):
     """Run `conan config install` with the same interpreter and conan entry point."""
+    _say(
+        (":: ", Color.BRIGHT_BLUE),
+        ("Remote conan config has been updated", Style.BRIGHT),
+        "  ",
+        (CONFIG_BRANCH, Color.BRIGHT_CYAN),
+        " ",
+        (_short(_read_rev()), Color.RED),
+        " -> ",
+        (_short(rev), Color.BRIGHT_GREEN),
+    )
+    _say("   running ", ("conan config install", Color.BRIGHT_BLUE), f" {CONFIG_REPO}")
     cmd = [
         sys.executable,
         sys.argv[0],
@@ -81,10 +121,6 @@ def _install(rev):
         "--type=git",
         f"--args=-b {CONFIG_BRANCH}",
     ]
-    sys.stderr.write(
-        f"[INFO] Remote conan config has been updated, running "
-        f"conan config install {CONFIG_REPO}\n"
-    )
     result = subprocess.run(
         cmd,
         check=False,
@@ -94,12 +130,19 @@ def _install(rev):
     )
     if result.returncode != 0:
         sys.stderr.write(result.stdout + result.stderr)
-        sys.stderr.write(
-            "[WARN] conan config install failed, continuing with the current config\n"
+        ConanOutput().warning(
+            "conan config install failed, continuing with the current config"
         )
         return False
     _write_rev(rev)
-    sys.stderr.write(f"[INFO] Conan config updated to {rev[:12]}\n")
+    _say(
+        (":: ", Color.BRIGHT_BLUE),
+        ("Conan config is now at ", Style.BRIGHT),
+        (_short(rev), Color.BRIGHT_GREEN),
+        " (",
+        (CONFIG_BRANCH, Color.BRIGHT_CYAN),
+        ")",
+    )
     return True
 
 
@@ -149,7 +192,27 @@ def config(conan_api, parser, *args):
     """
     parser.parse_args(*args)
     status = sync(force=True)
-    ConanOutput().info(
-        f"Conan config ({CONFIG_REPO} @ {CONFIG_BRANCH}): {status}, "
-        f"installed rev {(_read_rev() or 'none')[:12]}"
-    )
+    if status == "updated":
+        return  # _install() already reported the new revision
+    rev = (_short(_read_rev()), Color.BRIGHT_GREEN)
+    branch = (CONFIG_BRANCH, Color.BRIGHT_CYAN)
+    if status == "up-to-date":
+        _say(
+            (":: ", Color.BRIGHT_BLUE),
+            ("Conan config is up to date ", Style.BRIGHT),
+            rev,
+            " (",
+            branch,
+            ")",
+        )
+    else:
+        _say(
+            (":: ", Color.BRIGHT_YELLOW),
+            ("Remote conan config unreachable", Style.BRIGHT),
+            ", keeping ",
+            rev,
+            " (",
+            branch,
+            ")  ",
+            CONFIG_REPO,
+        )
