@@ -1,0 +1,4 @@
+include(linux-gcc-release)
+
+[settings]
+build_type=Debug

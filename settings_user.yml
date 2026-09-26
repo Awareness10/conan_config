@@ -1,0 +1,4 @@
+# Extra settings merged on top of Conan's default settings.yml
+os:
+  Linux:
+    distro: [null, "ubuntu22.04", "ubuntu24.04", "arch"]

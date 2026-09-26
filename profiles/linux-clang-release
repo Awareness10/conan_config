@@ -1,0 +1,11 @@
+include(base)
+
+[settings]
+compiler=clang
+compiler.version=19
+compiler.libcxx=libstdc++11
+build_type=Release
+
+[buildenv]
+CC=clang
+CXX=clang++

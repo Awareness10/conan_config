@@ -1,0 +1,7 @@
+[settings]
+os=Linux
+arch=x86_64
+compiler.cppstd=17
+
+[conf]
+tools.build:skip_test=False
