@@ -10,7 +10,8 @@ runs):
 - package/recipe downloads from remotes (`tar_extract`)
 - conan.tools.scm `Git.clone()`/`Git.fetch_commit()`: git --progress, streamed
 
-Lines look like pacman/paru downloads, colored when Conan would color output:
+Lines are drawn by a theme from ./progress_themes (default paru, like pacman/paru
+downloads), colored when Conan would color output:
 
      cmake/3.31.12 unpacking conan_package.tgz    43.0 MiB  17.2 MiB/s 00:01 [######------]  44%
 
@@ -21,6 +22,7 @@ skipped, with one warning, if they changed.
 
 Environment variables:
     CONAN_PROGRESS=0            disable all progress output
+    CONAN_PROGRESS_THEME=<name> theme from ./progress_themes: paru (default), btop
 """
 
 import contextvars
@@ -45,6 +47,8 @@ _scope = contextvars.ContextVar("progress_scope", default="")
 
 
 def _enabled():
+    if _theme is None:
+        return False
     if os.environ.get("CONAN_PROGRESS", "1").lower() in ("0", "false", "no", "off"):
         return False
     try:
@@ -55,19 +59,26 @@ def _enabled():
         return True
 
 
-def _human(n):
-    for unit in ("B", "KiB", "MiB", "GiB"):
-        if n < 1024 or unit == "GiB":
-            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
-        n /= 1024
+def _load_theme():
+    """Import the CONAN_PROGRESS_THEME theme from ./progress_themes (see its __init__.py).
 
+    Done while Conan loads this hook: afterwards Conan drops modules imported from the
+    hooks folder out of sys.modules, so nothing can be imported from there lazily.
+    """
+    import importlib.util
 
-def _duration(seconds):
-    seconds = int(seconds)
-    return f"{seconds // 60:02d}:{seconds % 60:02d}"
-
-
-# -- colors --------------------------------------------------------------------------------------
+    folder = os.path.join(os.path.dirname(os.path.abspath(__file__)), "progress_themes")
+    name = "conan_config_progress_themes"
+    spec = importlib.util.spec_from_file_location(
+        name, os.path.join(folder, "__init__.py"), submodule_search_locations=[folder]
+    )
+    package = importlib.util.module_from_spec(spec)
+    sys.modules[name] = package
+    spec.loader.exec_module(package)
+    theme, error = package.load(os.getenv("CONAN_PROGRESS_THEME", package.DEFAULT))
+    if error:
+        ConanOutput().warning(f"[hook_progress] {error}")
+    return theme, sys.modules[f"{name}._common"].render
 
 
 def _color_enabled():
@@ -79,65 +90,11 @@ def _color_enabled():
     return sys.stderr.isatty()
 
 
-BOLD, DIM, RESET = "\x1b[1m", "\x1b[2m", "\x1b[0m"
-BLUE, GREEN = "\x1b[34m", "\x1b[32m"
-
-
-def _scope_parts(scope):
-    """paru colors packages as bold name + green version: `cmake` `/` `3.31.12`."""
-    name, _, version = scope.partition("/")
-    parts = [(name, BOLD)]
-    if version:
-        parts += [("/", None), (version, BOLD + GREEN)]
-    return parts
-
-
-# -- line layout ---------------------------------------------------------------------------------
-# pacman/paru download line: `left ... right [####----]  45%`, flush right. left is a list of
-# (text, sgr) segments, right a list of (kind, segments) groups that are dropped whole when the
-# terminal is too narrow ("detail" first, then from the end), and bar(width) returns the
-# segments of a bar of that many cells.
-
-
-def _layout(st):
-    left = [(" ", None)]
-    if st.scope:
-        left += [*_scope_parts(st.scope), (" ", None)]
-    left += [(st.verb, DIM), (" ", None), (st.name, None)]
-    right = []
-    if st.detail:
-        right.append(("detail", [(st.detail, None), (" ", None)]))
-    if st.total:
-        right.append(("size", [(f"{_human(st.total):>10}", None), (" ", None)]))
-    if st.rate:
-        right.append(("rate", [(f"{_human(st.rate) + '/s':>12}", None), (" ", None)]))
-    seconds = st.elapsed if st.finished or st.eta is None else st.eta
-    right.append(("time", [(_duration(seconds), None), (" ", None)]))
-    pct_color = BOLD + GREEN if st.finished else BOLD
-
-    def bar(width):
-        filled = round(width * st.fraction)
-        return [
-            ("[", None),
-            ("#" * filled, BOLD + BLUE),
-            ("-" * (width - filled), DIM),
-            ("]", None),
-            (f" {int(st.fraction * 100):3d}%", pct_color),
-        ]
-
-    return left, right, bar
-
-
-def _flat(groups):
-    return [seg for _, segments in groups for seg in segments]
-
-
-def _width(segments):
-    return sum(len(text) for text, _ in segments)
-
-
 class _State:
+    """What a theme draws; see progress_themes/__init__.py."""
+
     scope = verb = name = detail = ""
+    cells = None  # bar width, fixed per line by the theme renderer
     fraction = 0.0
     done = total = rate = 0
     eta = None
@@ -154,7 +111,6 @@ class _Progress:
         self._start = time.monotonic()
         self._last = 0.0
         self._drawn = False
-        self._cells = None
         self.state = _State()
         self.state.verb, self.state.name = verb, name
         self.state.scope = _scope.get() if scope is None else scope
@@ -182,30 +138,8 @@ class _Progress:
         self._draw()
 
     def _draw(self):
-        left, right, bar = _layout(self.state)
         width = shutil.get_terminal_size().columns - 1 if self._tty else 100
-        if self._cells is None:
-            # Fixed for the whole line so the bar doesn't jitter as the numbers change
-            reserve = 42  # room for the numbers on the right
-            self._cells = max(10, min(40, width - _width(left) - reserve))
-        bar_segments = bar(self._cells)
-
-        # Too wide: drop git's counters first, then groups from the end
-        def fits():
-            return _width(left + _flat(right) + bar_segments) + 2 <= width
-
-        if not fits():
-            right = [group for group in right if group[0] != "detail"]
-        while right and not fits():
-            right = right[:-1]
-        right = _flat(right)
-
-        fill = max(1, width - _width(left + right + bar_segments))
-        segments = left + [(" " * fill, None)] + right + bar_segments
-        line = "".join(
-            f"{sgr}{text}{RESET}" if sgr and self._color else text
-            for text, sgr in segments
-        )
+        line = _render(_theme.layout(self.state), self.state, width, self._color)
         sys.stderr.write(("\r\x1b[2K" + line) if self._tty else (line + "\n"))
         sys.stderr.flush()
         self._drawn = True
@@ -451,4 +385,11 @@ def _install():
         )
 
 
+try:
+    _theme, _render = _load_theme()
+except Exception as e:  # noqa: BLE001 - a broken theme must not break conan
+    ConanOutput().warning(
+        f"[hook_progress] can't load progress theme, no progress: {e}"
+    )
+    _theme = _render = None
 _install()

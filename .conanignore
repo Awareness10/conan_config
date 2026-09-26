@@ -1,4 +1,6 @@
 README.md
 .git*
-.ruff_cache
-__pycache__
+# Patterns match file paths (fnmatch), so folders need a trailing /*
+.ruff_cache/*
+*__pycache__/*
+dev/*
