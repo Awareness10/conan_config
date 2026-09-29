@@ -60,6 +60,7 @@ def preview(theme):
     archive(
         hook, "boost/1.86.0", "extracting", "boost_1_86_0.tar.bz2", 124_000_000, 3.0
     )
+    archive(hook, "demo/0.1", "compressing", "conan_package.tgz", 88_000_000, 2.0)
     git_clone(hook, "demo/0.1")
 
 

@@ -1,13 +1,14 @@
-"""Progress output for archive extraction and git clone/fetch.
+"""Progress output for archive extraction/compression and git clone/fetch.
 
 Conan prints nothing while it extracts sources (`get`/`unzip`), unpacks
-downloaded packages or runs `git clone`, so long steps look frozen. Hooks can
-only run before/after a whole step, so this module instead patches those Conan
-functions when Conan loads the hooks (once per command, before any recipe
-runs):
+downloaded packages, compresses packages for upload or runs `git clone`, so long
+steps look frozen. Hooks can only run before/after a whole step, so this module
+instead patches those Conan functions when Conan loads the hooks (once per
+command, before any recipe runs):
 
 - conan.tools.files `unzip()`/`get()`: .tar.* and .zip sources
 - package/recipe downloads from remotes (`tar_extract`)
+- `compress_files()`: the archive written by `conan upload`/`conan cache save`
 - conan.tools.scm `Git.clone()`/`Git.fetch_commit()`: git --progress, streamed
 
 Lines are drawn by a theme from ./progress_themes (default paru, like pacman/paru
@@ -151,7 +152,11 @@ class _Progress:
         st.finished, st.fraction, st.elapsed = True, 1.0, time.monotonic() - self._start
         st.done = st.total
         self._draw()
-        if self._tty:
+        self.stop()
+
+    def stop(self):
+        """Leave the line where it is: the operation ended without finishing."""
+        if self._drawn and self._tty:
             sys.stderr.write("\n")
             sys.stderr.flush()
 
@@ -295,6 +300,128 @@ def _patch_package_downloads():
         remote_manager.uncompress_file = uncompress_file
 
 
+# -- compression ---------------------------------------------------------------------------------
+
+# Counter for the archive the current thread is writing (set by the compress_files patch)
+_compressing = contextvars.ContextVar("progress_compressing", default=None)
+
+
+class _Counter:
+    """Bytes of input the files of one archive have contributed so far."""
+
+    def __init__(self, progress, total):
+        self._progress, self._total, self._done = progress, total, 0
+
+    def add(self, size):
+        self._done += size
+        self._progress.update(
+            self._done / self._total if self._total else 0.0, self._done, self._total
+        )
+
+
+class _CountingReader:
+    """Source file for TarFile.addfile(), reporting what the archive reads from it."""
+
+    def __init__(self, fileobj, counter):
+        self._fileobj, self._counter = fileobj, counter
+
+    def read(self, size=-1):
+        block = self._fileobj.read(size)
+        self._counter.add(len(block))
+        return block
+
+
+def _content_size(files, recursive):
+    """Bytes tar will read: the files themselves, plus their trees when recursive."""
+    total = 0
+    for path in files.values():
+        try:
+            if os.path.islink(path):
+                continue  # stored as a symlink, no content is read
+            if os.path.isfile(path):
+                total += os.path.getsize(path)
+            elif recursive and os.path.isdir(path):
+                for root, _, names in os.walk(path):
+                    for name in names:
+                        child = os.path.join(root, name)
+                        if not os.path.islink(child):
+                            total += os.path.getsize(child)
+        except OSError:  # a file that vanished only skews the total
+            pass
+    return total
+
+
+def _patch_compression():
+    """Progress while `conan upload`/`conan cache save` write a .tgz/.txz/.tzst.
+
+    The bar measures the uncompressed input: compress_files() sizes up the files first,
+    then every format funnels their contents through TarFile.addfile(), whichever
+    Python version is running. A format this Python cannot write (.tzst needs 3.14+)
+    is rejected by Conan before compress_files() starts, so no line is drawn.
+    """
+    import inspect
+    import tarfile
+
+    from conan.api.subapi import cache as cache_mod
+    from conan.internal.api import uploader
+
+    original = getattr(uploader, "compress_files", None)
+    expected = ["files", "name", "dest_dir", "compresslevel", "scope", "recursive"]
+    if original is None or list(inspect.signature(original).parameters) != expected:
+        return "archive compression"
+
+    original_addfile = tarfile.TarFile.addfile
+    if list(inspect.signature(original_addfile).parameters) != [
+        "self",
+        "tarinfo",
+        "fileobj",
+    ]:
+        return "archive compression (tarfile.TarFile.addfile)"
+
+    def addfile(self, tarinfo, fileobj=None):
+        counter = _compressing.get()
+        if counter is not None and fileobj is not None:
+            fileobj = _CountingReader(fileobj, counter)
+        return original_addfile(self, tarinfo, fileobj)
+
+    tarfile.TarFile.addfile = addfile
+
+    def compress_files(
+        files, name, dest_dir, compresslevel=None, scope=None, recursive=False
+    ):
+        def run():
+            return original(
+                files,
+                name,
+                dest_dir,
+                compresslevel=compresslevel,
+                scope=scope,
+                recursive=recursive,
+            )
+
+        # uploads can compress in parallel threads; each gets its own contextvar
+        if not _enabled() or _compressing.get() is not None:
+            return run()
+        progress = _Progress("compressing", name, scope=scope or "")
+        token = _compressing.set(_Counter(progress, _content_size(files, recursive)))
+        try:
+            result = run()
+        except BaseException:
+            progress.stop()  # a half-written archive is not 100% done
+            raise
+        else:
+            progress.done()
+            return result
+        finally:
+            _compressing.reset(token)
+
+    uploader.compress_files = compress_files
+
+    # `conan cache save` imported the function by name before this hook loaded
+    if getattr(cache_mod, "compress_files", None) is original:
+        cache_mod.compress_files = compress_files
+
+
 # -- git -----------------------------------------------------------------------------------------
 
 _GIT_PROGRESS = re.compile(
@@ -372,7 +499,13 @@ def _install():
         return  # hooks can be loaded more than once per process
     setattr(files_pkg, _MARKER, True)
     skipped = []
-    for patch in (_patch_source_archives, _patch_package_downloads, _patch_git):
+    patches = (
+        _patch_source_archives,
+        _patch_package_downloads,
+        _patch_compression,
+        _patch_git,
+    )
+    for patch in patches:
         try:
             if failed := patch():
                 skipped.append(failed)
