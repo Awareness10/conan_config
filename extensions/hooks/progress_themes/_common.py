@@ -64,17 +64,26 @@ def _flat(groups):
     return [seg for _, segments in groups for seg in segments]
 
 
-def render(line, st, width, color):
-    """The line as a string no wider than `width`, with or without colors."""
+def left_width(line):
+    return _width(line.left)
+
+
+def render(line, st, width, color, pad_left=0):
+    """The line as a string no wider than `width`, with or without colors.
+
+    pad_left widens the left part to that many columns, so the bars of stacked lines
+    start in the same column.
+    """
+    left = line.left
+    if pad_left > _width(left):
+        left = [*left, (" " * (pad_left - _width(left)), None)]
     if st.cells is None:  # fixed per line, so the bar doesn't jitter as numbers change
-        st.cells = max(
-            10, min(line.max_cells, width - _width(line.left) - line.reserve)
-        )
+        st.cells = max(10, min(line.max_cells, width - _width(left) - line.reserve))
     bar = line.bar(st.cells)
     right = line.right
 
     def fits():
-        return _width(line.left + _flat(right) + bar) + 2 <= width
+        return _width(left + _flat(right) + bar) + 2 <= width
 
     if not fits():
         right = [group for group in right if group[0] != "detail"]
@@ -83,10 +92,10 @@ def render(line, st, width, color):
     right = _flat(right)
 
     if line.flush_right:
-        fill = max(1, width - _width(line.left + right + bar))
-        segments = [*line.left, (" " * fill, None), *right, *bar]
+        fill = max(1, width - _width(left + right + bar))
+        segments = [*left, (" " * fill, None), *right, *bar]
     else:
-        segments = [*line.left, (" ", None), *bar, *right]
+        segments = [*left, (" ", None), *bar, *right]
     return "".join(
         f"{sgr}{text}{RESET}" if sgr and color else text for text, sgr in segments
     )
