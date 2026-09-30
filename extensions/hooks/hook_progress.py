@@ -19,9 +19,9 @@ downloads), colored when Conan would color output:
      cmake/3.31.12 unpacking conan_package.tgz    43.0 MiB  17.2 MiB/s 00:01 [######------]  44%
 
 Operations that finish within half a second print nothing. On a terminal it
-draws a single updating line (parallel operations take turns: the first one owns
-the line, the others stay quiet until it finishes); otherwise (CI logs) it
-prints a line every 5 seconds. Each patch checks the Conan internals it relies on and is
+draws a single updating line that stays below Conan's other messages (parallel
+operations take turns: the first one owns the line, the others stay quiet until
+it finishes); otherwise (CI logs) it prints a line every 5 seconds. Each patch checks the Conan internals it relies on and is
 skipped, with one warning, if they changed.
 
 Environment variables:
@@ -49,10 +49,14 @@ _SHOW_AFTER = 0.5  # seconds; quicker operations print nothing
 # Package the current extraction belongs to, e.g. "cmake/3.31.12" (set by the patches)
 _scope = contextvars.ContextVar("progress_scope", default="")
 
-# On a TTY one line at a time: parallel downloads/uploads would overwrite each other's
-# line, so the first to draw owns it and the others stay quiet until it finishes
-_line_lock = threading.Lock()
-_line_owner = None
+# The terminal line (TTY only). Parallel downloads/uploads would overwrite each other's
+# line, so the first to draw owns it and the others stay quiet until it finishes. Conan
+# prints from other threads meanwhile: the _patch_output() writers clear the line first
+# and redraw it below the message, so it never ends up glued to one or left half-done.
+_line_lock = threading.RLock()  # held for every write to the terminal
+_line_owner = None  # the _Progress that draws the line
+_line_shown = ""  # the line as it is on screen now, "" when there is none
+_line_held = False  # Conan left a line unfinished (a prompt): don't draw over it
 
 
 def _enabled():
@@ -146,29 +150,27 @@ class _Progress:
         self._last = now
         self._draw()
 
-    def _owns_line(self):
-        global _line_owner
-        if not self._tty:
-            return True
+    def _draw(self):
+        global _line_owner, _line_shown
+        width = shutil.get_terminal_size().columns - 1 if self._tty else 100
         with _line_lock:
+            if not self._tty:
+                line = _render(
+                    _theme.layout(self.state), self.state, width, self._color
+                )
+                sys.stderr.write(line + "\n")
+                sys.stderr.flush()
+                self._drawn = True
+                return
             if _line_owner is None:
                 _line_owner = self
-            return _line_owner is self
-
-    def _release_line(self):
-        global _line_owner
-        with _line_lock:
-            if _line_owner is self:
-                _line_owner = None
-
-    def _draw(self):
-        if not self._owns_line():
-            return
-        width = shutil.get_terminal_size().columns - 1 if self._tty else 100
-        line = _render(_theme.layout(self.state), self.state, width, self._color)
-        sys.stderr.write(("\r\x1b[2K" + line) if self._tty else (line + "\n"))
-        sys.stderr.flush()
-        self._drawn = True
+            if _line_owner is not self or _line_held:
+                return
+            line = _render(_theme.layout(self.state), self.state, width, self._color)
+            sys.stderr.write("\r\x1b[2K" + line)
+            sys.stderr.flush()
+            _line_shown = line
+            self._drawn = True
 
     def done(self):
         if not self._drawn:
@@ -176,15 +178,37 @@ class _Progress:
         st = self.state
         st.finished, st.fraction, st.elapsed = True, 1.0, time.monotonic() - self._start
         st.done = st.total
-        self._draw()
-        self.stop()
+        with _line_lock:  # the final line must not be cleared by the next writer
+            self._draw()
+            self.stop()
 
     def stop(self):
         """Leave the line where it is: the operation ended without finishing."""
-        if self._drawn and self._tty:
-            sys.stderr.write("\n")
-            sys.stderr.flush()
-        self._release_line()
+        global _line_owner, _line_shown
+        with _line_lock:
+            if _line_owner is not self:
+                return
+            if _line_shown and not _line_held:
+                sys.stderr.write("\n")
+                sys.stderr.flush()
+            _line_owner, _line_shown = None, ""
+
+
+def _clear_line():
+    """Before other output: take the progress line off the screen (caller holds the lock)."""
+    if _line_shown and not _line_held:
+        sys.stderr.write("\r\x1b[2K")
+        sys.stderr.flush()
+
+
+def _restore_line(ended_line):
+    """After other output: draw the progress line again below it, unless the output
+    stopped mid-line (a prompt), which the line would overwrite."""
+    global _line_held
+    _line_held = not ended_line
+    if _line_shown and ended_line:
+        sys.stderr.write(_line_shown)
+        sys.stderr.flush()
 
 
 class _ProgressFile(io.FileIO):
@@ -232,6 +256,41 @@ class _ProgressFile(io.FileIO):
             self._progress.done()
             self._progress = None
         super().close()
+
+
+def _patch_output():
+    """Keep Conan's messages off the progress line: ConanOutput writes whole lines to
+    stderr from any thread, which would land after the bar and leave it half-done."""
+    import inspect
+
+    for method, text_arg in (("write", "data"), ("_write_message", "msg")):
+        original = getattr(ConanOutput, method, None)
+        params = list(inspect.signature(original).parameters) if original else []
+        if params[:2] != ["self", text_arg] or "newline" not in params:
+            return f"Conan output ({method})"
+
+    def wrap(original, text_arg):
+        signature = inspect.signature(original)
+
+        def method(self, *args, **kwargs):
+            with _line_lock:
+                if _line_owner is None and not _line_held:
+                    return original(self, *args, **kwargs)
+                call = signature.bind(self, *args, **kwargs)
+                call.apply_defaults()
+                ended_line = call.arguments["newline"] or str(
+                    call.arguments[text_arg]
+                ).endswith("\n")
+                _clear_line()
+                try:
+                    return original(self, *args, **kwargs)
+                finally:
+                    _restore_line(ended_line)
+
+        return method
+
+    ConanOutput.write = wrap(ConanOutput.write, "data")
+    ConanOutput._write_message = wrap(ConanOutput._write_message, "msg")
 
 
 # -- archives ------------------------------------------------------------------------------------
@@ -656,6 +715,7 @@ def _install():
     setattr(files_pkg, _MARKER, True)
     skipped = []
     patches = (
+        _patch_output,
         _patch_source_archives,
         _patch_package_downloads,
         _patch_downloads,
