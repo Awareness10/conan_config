@@ -7,6 +7,7 @@ import importlib.util
 import os
 import subprocess
 import sys
+import threading
 import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -20,8 +21,8 @@ def load_hook():
     return hook
 
 
-def archive(hook, scope, verb, name, size, seconds):
-    p = hook._Progress(verb, name, scope=scope)
+def archive(hook, scope, verb, name, size, seconds, transfer=False):
+    p = hook._Progress(verb, name, scope=scope, transfer=transfer)
     steps = int(seconds / 0.05)
     for i in range(1, steps + 1):
         time.sleep(0.05)
@@ -52,6 +53,23 @@ def git_clone(hook, scope):
     p.done()
 
 
+def parallel(hook, verb, packages):
+    """Transfers in threads, like core.download:parallel, with Conan chatter between."""
+    from conan.api.output import ConanOutput
+
+    def one(scope, size, seconds):
+        ConanOutput(scope=scope).info(f"{verb.capitalize()} conan_package.tgz")
+        archive(hook, scope, verb, "conan_package.tgz", size, seconds, transfer=True)
+        ConanOutput(scope=scope).info("Package installed")
+
+    threads = [threading.Thread(target=one, args=package) for package in packages]
+    for thread in threads:
+        thread.start()
+        time.sleep(0.3)
+    for thread in threads:
+        thread.join()
+
+
 def preview(theme):
     os.environ["CONAN_PROGRESS_THEME"] = theme
     hook = load_hook()  # the theme is picked when the hook loads
@@ -63,6 +81,14 @@ def preview(theme):
     )
     archive(hook, "demo/0.1", "compressing", "conan_package.tgz", 88_000_000, 2.0)
     git_clone(hook, "demo/0.1")
+    packages = [
+        ("zlib/1.3.1", 12_000_000, 1.5),
+        ("openssl/3.4.1", 48_000_000, 3.0),
+        ("boost/1.86.0", 160_000_000, 4.0),
+        ("fmt/11.1.4", 9_000_000, 1.2),
+    ]
+    parallel(hook, "downloading", packages)
+    parallel(hook, "uploading", packages[:2])
 
 
 if __name__ == "__main__":

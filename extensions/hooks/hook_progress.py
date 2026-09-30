@@ -1,15 +1,16 @@
-"""Progress output for downloads, archive extraction/compression and git clone/fetch.
+"""Progress output for transfers, archive extraction/compression and git clone/fetch.
 
-Conan prints little or nothing while it downloads files, extracts sources
-(`get`/`unzip`), unpacks downloaded packages, compresses packages for upload or
-runs `git clone`, so long steps look frozen. Hooks can only run before/after a whole step, so this module
-instead patches those Conan functions when Conan loads the hooks (once per
-command, before any recipe runs):
+Conan prints little or nothing while it downloads or uploads files, extracts
+sources (`get`/`unzip`), unpacks downloaded packages, compresses packages for
+upload or runs `git clone`, so long steps look frozen. Hooks can only run
+before/after a whole step, so this module instead patches those Conan functions
+when Conan loads the hooks (once per command, before any recipe runs):
 
 - conan.tools.files `unzip()`/`get()`: .tar.* and .zip sources
 - package/recipe downloads from remotes (`tar_extract`)
 - file downloads (`FileDownloader`): recipes/packages from remotes, `download()`/`get()`
   sources, `conan config install` archives; replaces Conan's every-10s "Downloaded" lines
+- file uploads (`FileUploader`): `conan upload`; replaces its every-10s "Uploading" lines
 - `compress_files()`: the archive written by `conan upload`/`conan cache save`
 - conan.tools.scm `Git.clone()`/`Git.fetch_commit()`: git --progress, streamed
 
@@ -18,11 +19,13 @@ downloads), colored when Conan would color output:
 
      cmake/3.31.12 unpacking conan_package.tgz    43.0 MiB  17.2 MiB/s 00:01 [######------]  44%
 
-Operations that finish within half a second print nothing. On a terminal it
-draws a single updating line that stays below Conan's other messages (parallel
-operations take turns: the first one owns the line, the others stay quiet until
-it finishes); otherwise (CI logs) it prints a line every 5 seconds. Each patch checks the Conan internals it relies on and is
-skipped, with one warning, if they changed.
+Operations that finish within half a second print nothing. On a terminal the
+running operations share a block of updating lines below Conan's other messages,
+one per operation, with a Total line while two or more transfers run (like
+pacman's parallel downloads); a finished line is printed above the block.
+Otherwise (CI logs) each operation prints a line every 5 seconds. Each patch
+checks the Conan internals it relies on and is skipped, with one warning, if
+they changed.
 
 Environment variables:
     CONAN_PROGRESS=0            disable all progress output
@@ -48,15 +51,6 @@ _SHOW_AFTER = 0.5  # seconds; quicker operations print nothing
 
 # Package the current extraction belongs to, e.g. "cmake/3.31.12" (set by the patches)
 _scope = contextvars.ContextVar("progress_scope", default="")
-
-# The terminal line (TTY only). Parallel downloads/uploads would overwrite each other's
-# line, so the first to draw owns it and the others stay quiet until it finishes. Conan
-# prints from other threads meanwhile: the _patch_output() writers clear the line first
-# and redraw it below the message, so it never ends up glued to one or left half-done.
-_line_lock = threading.RLock()  # held for every write to the terminal
-_line_owner = None  # the _Progress that draws the line
-_line_shown = ""  # the line as it is on screen now, "" when there is none
-_line_held = False  # Conan left a line unfinished (a prompt): don't draw over it
 
 
 def _enabled():
@@ -91,7 +85,8 @@ def _load_theme():
     theme, error = package.load(os.getenv("CONAN_PROGRESS_THEME", package.DEFAULT))
     if error:
         ConanOutput().warning(f"[hook_progress] {error}")
-    return theme, sys.modules[f"{name}._common"].render
+    common = sys.modules[f"{name}._common"]
+    return theme, common.render, common.left_width
 
 
 def _color_enabled():
@@ -115,18 +110,28 @@ class _State:
     finished = False
 
 
-class _Progress:
-    """One progress line on stderr: redrawn in place on a TTY, periodic otherwise."""
+def _short_scope(scope):
+    """ "zlib/1.3.1#rev:pkgid#prev" -> "zlib/1.3.1": the ids don't fit a progress line."""
+    return str(scope).split("#")[0].split(":")[0]
 
-    def __init__(self, verb, name, scope=None):
+
+class _Progress:
+    """One progress line on stderr: a line of the _Block on a TTY, periodic otherwise.
+
+    transfer marks downloads/uploads, which the block's Total line adds up.
+    """
+
+    def __init__(self, verb, name, scope=None, transfer=False):
         self._tty = sys.stderr.isatty()
         self._color = _color_enabled()
         self._start = time.monotonic()
         self._last = 0.0
         self._drawn = False
+        self.transfer = transfer
+        self.ended = False  # done() or stop(): the line won't change any more
         self.state = _State()
         self.state.verb, self.state.name = verb, name
-        self.state.scope = _scope.get() if scope is None else scope
+        self.state.scope = _short_scope(_scope.get() if scope is None else scope)
 
     def update(self, fraction, done=0, total=0, detail="", force=False):
         st = self.state
@@ -148,67 +153,143 @@ class _Progress:
         ):
             return
         self._last = now
-        self._draw()
+        self._draw(force)
 
-    def _draw(self):
-        global _line_owner, _line_shown
-        width = shutil.get_terminal_size().columns - 1 if self._tty else 100
-        with _line_lock:
-            if not self._tty:
-                line = _render(
-                    _theme.layout(self.state), self.state, width, self._color
-                )
-                sys.stderr.write(line + "\n")
-                sys.stderr.flush()
+    def _draw(self, force=False):
+        if self._tty:
+            if _block.show(self):
                 self._drawn = True
-                return
-            if _line_owner is None:
-                _line_owner = self
-            if _line_owner is not self or _line_held:
-                return
-            line = _render(_theme.layout(self.state), self.state, width, self._color)
-            sys.stderr.write("\r\x1b[2K" + line)
+                _block.redraw(force)
+            return
+        with _block.lock:
+            line = _render(_theme.layout(self.state), self.state, 100, self._color)
+            sys.stderr.write(line + "\n")
             sys.stderr.flush()
-            _line_shown = line
-            self._drawn = True
+        self._drawn = True
 
     def done(self):
-        if not self._drawn:
-            return
         st = self.state
         st.finished, st.fraction, st.elapsed = True, 1.0, time.monotonic() - self._start
         st.done = st.total
-        with _line_lock:  # the final line must not be cleared by the next writer
-            self._draw()
-            self.stop()
+        self.stop()
 
     def stop(self):
-        """Leave the line where it is: the operation ended without finishing."""
-        global _line_owner, _line_shown
-        with _line_lock:
-            if _line_owner is not self:
+        """End the line where it is: done() at 100%, or the operation failed."""
+        self.ended = True
+        if self._tty:
+            _block.ended(self)
+        elif self._drawn:  # the last periodic line may be seconds old
+            self._draw()
+
+
+class _Block:
+    """The progress lines at the bottom of a terminal, like pacman's parallel downloads.
+
+    Every running operation gets a line, in the order they started. A finished line
+    leaves the block for good, printed above it. (pacman keeps it in place until the
+    lines above finish too, but Conan's operations differ far more in length: one long
+    compression would pin every line below it.) With two or more transfers a Total
+    line adds them up. Conan prints
+    from other threads meanwhile: _patch_output() takes the block off the screen for
+    each message and draws it again below. The cursor waits on the line below it.
+    """
+
+    def __init__(self):
+        self.lock = threading.RLock()  # held for every write to the terminal
+        self.bars = []  # _Progress lines in the block, top to bottom
+        self.lines = 0  # lines of the block on screen now
+        self.held = False  # Conan left a line unfinished (a prompt): don't draw over it
+        self.transfers = []  # shown since the block was last empty: the Total line
+        self._cells = None  # bar width, the same for every line of the block
+        self._last = 0.0
+
+    def show(self, bar):
+        """Add a line for bar if the terminal has room; returns whether it has one."""
+        with self.lock:
+            if bar.transfer and bar not in self.transfers:
+                self.transfers.append(bar)
+            if bar in self.bars:
+                return True
+            rows = shutil.get_terminal_size().lines
+            if len(self.bars) >= max(1, rows - 3):  # the rest wait for a free line
+                return False
+            self.bars.append(bar)
+            return True
+
+    def ended(self, bar):
+        with self.lock:
+            if bar in self.bars or bar in self.transfers:
+                self.redraw(force=True)
+
+    def clear(self):
+        """Before other output: take the block off the screen."""
+        if self.lines and not self.held:
+            sys.stderr.write(f"\x1b[{self.lines}A\r\x1b[J")
+            sys.stderr.flush()
+            self.lines = 0
+
+    def restore(self, ended_line):
+        """After other output: draw the block below it, unless the output stopped
+        mid-line (a prompt), which the block would overwrite."""
+        self.held = not ended_line
+        if ended_line and (self.bars or self.transfers):
+            self.redraw(force=True)
+
+    def _total(self):
+        if len(self.transfers) < 2:
+            return None
+        st = _State()
+        finished = sum(bar.ended for bar in self.transfers)
+        st.verb, st.name = "Total", f"({finished}/{len(self.transfers)})"
+        st.done = sum(bar.state.done for bar in self.transfers)
+        st.total = sum(bar.state.total for bar in self.transfers)
+        st.fraction = st.done / st.total if st.total else 0.0
+        st.elapsed = time.monotonic() - min(bar._start for bar in self.transfers)
+        st.rate = st.done / st.elapsed if st.elapsed > 0 else 0
+        st.eta = (st.total - st.done) / st.rate if st.rate else None
+        st.finished = finished == len(self.transfers)
+        return st
+
+    def redraw(self, force=False):
+        with self.lock:
+            now = time.monotonic()
+            if self.held or (not force and now - self._last < _TTY_INTERVAL):
                 return
-            if _line_shown and not _line_held:
-                sys.stderr.write("\n")
-                sys.stderr.flush()
-            _line_owner, _line_shown = None, ""
+            self._last = now
+            width = shutil.get_terminal_size().columns - 1
+            out = [f"\x1b[{self.lines}A\r\x1b[J" if self.lines else "\r\x1b[J"]
+            total = self._total()
+            states = [bar.state for bar in self.bars] + ([total] if total else [])
+            lefts = [_left_width(_theme.layout(st)) for st in states]
+            pad = min(width // 2, max(lefts, default=0))
+            for bar in [bar for bar in self.bars if bar.ended]:  # leave for good
+                out.append(self._line(bar.state, width, pad) + "\n")
+                self.bars.remove(bar)
+            lines = [self._line(bar.state, width, pad) for bar in self.bars]
+            if total is not None and not self.bars:  # all done: the final sum
+                out.append(self._line(total, width, pad) + "\n")
+            elif total is not None and any(
+                bar.transfer and not bar.ended for bar in self.bars
+            ):
+                lines.append(self._line(total, width, pad))
+            if not self.bars:
+                self.transfers, self._cells = [], None
+            out += [line + "\n" for line in lines]
+            self.lines = len(lines)
+            sys.stderr.write("".join(out))
+            sys.stderr.flush()
+
+    def _line(self, st, width, pad):
+        """st rendered with the block's bar width, its bar in the same column as the
+        other lines' (pad: the widest left part)."""
+        if st.cells is None:  # _render() picks one for the first line
+            st.cells = self._cells
+        line = _render(_theme.layout(st), st, width, _color_enabled(), pad)
+        self._cells = self._cells or st.cells
+        return line
 
 
-def _clear_line():
-    """Before other output: take the progress line off the screen (caller holds the lock)."""
-    if _line_shown and not _line_held:
-        sys.stderr.write("\r\x1b[2K")
-        sys.stderr.flush()
-
-
-def _restore_line(ended_line):
-    """After other output: draw the progress line again below it, unless the output
-    stopped mid-line (a prompt), which the line would overwrite."""
-    global _line_held
-    _line_held = not ended_line
-    if _line_shown and ended_line:
-        sys.stderr.write(_line_shown)
-        sys.stderr.flush()
+_block = _Block()
 
 
 class _ProgressFile(io.FileIO):
@@ -217,15 +298,32 @@ class _ProgressFile(io.FileIO):
     tarfile reads a compressed archive twice: extractall() first decompresses everything to
     list the members, then rewinds and decompresses again to extract them. Pass passes=2 and
     the bar covers both; a rewind from past the middle of the file starts the next pass.
+
+    Closing it ends the line at 100%; with only_if_read, only if it was read to the end
+    (an upload that failed halfway stays at its percentage).
     """
 
-    def __init__(self, path, verb, mode="rb", passes=1):
+    def __init__(
+        self,
+        path,
+        verb,
+        mode="rb",
+        passes=1,
+        scope=None,
+        transfer=False,
+        only_if_read=False,
+    ):
         super().__init__(path, "r" if "r" in mode else mode)
         self._size = os.path.getsize(path)
         self._passes = passes
         self._pass = 0
         self._furthest = 0
-        self._progress = _Progress(verb, os.path.basename(path)) if _enabled() else None
+        self._only_if_read = only_if_read
+        self._progress = (
+            _Progress(verb, os.path.basename(path), scope=scope, transfer=transfer)
+            if _enabled()
+            else None
+        )
 
     def _report(self):
         pos = self.tell()
@@ -253,14 +351,17 @@ class _ProgressFile(io.FileIO):
 
     def close(self):
         if self._progress and not self.closed:
-            self._progress.done()
+            if self._only_if_read and self._furthest < self._size:
+                self._progress.stop()
+            else:
+                self._progress.done()
             self._progress = None
         super().close()
 
 
 def _patch_output():
-    """Keep Conan's messages off the progress line: ConanOutput writes whole lines to
-    stderr from any thread, which would land after the bar and leave it half-done."""
+    """Keep Conan's messages off the progress lines: ConanOutput writes whole lines to
+    stderr from any thread, which would land in the block and leave half-done bars."""
     import inspect
 
     for method, text_arg in (("write", "data"), ("_write_message", "msg")):
@@ -273,19 +374,19 @@ def _patch_output():
         signature = inspect.signature(original)
 
         def method(self, *args, **kwargs):
-            with _line_lock:
-                if _line_owner is None and not _line_held:
+            with _block.lock:
+                if not _block.lines and not _block.held:
                     return original(self, *args, **kwargs)
                 call = signature.bind(self, *args, **kwargs)
                 call.apply_defaults()
                 ended_line = call.arguments["newline"] or str(
                     call.arguments[text_arg]
                 ).endswith("\n")
-                _clear_line()
+                _block.clear()
                 try:
                     return original(self, *args, **kwargs)
                 finally:
-                    _restore_line(ended_line)
+                    _block.restore(ended_line)
 
         return method
 
@@ -497,7 +598,9 @@ def _patch_downloads():
         if not _enabled() or _downloading.get() is not None:
             return run()
         scope = getattr(self._output, "scope", "") or ""
-        progress = _Progress("downloading", os.path.basename(file_path), scope=scope)
+        progress = _Progress(
+            "downloading", os.path.basename(file_path), scope=scope, transfer=True
+        )
         token = _downloading.set(progress)
         try:
             result = run()
@@ -513,6 +616,33 @@ def _patch_downloads():
     cls._requester = _WhileDownloading("_requester", _DownloadRequester)
     cls._output = _WhileDownloading("_output", lambda out, _: _QuietTimedOutput(out))
     cls._download_file = _download_file
+
+
+# -- uploads -------------------------------------------------------------------------------------
+
+
+def _patch_uploads():
+    """Progress while `conan upload` sends files: FileUploader._upload_file() hands the
+    request a `FileProgress(abs_path, mode='rb', msg=f"{ref}: Uploading")` to read from,
+    which otherwise prints "Uploading x: 30%" every 10s for files over 100 MB."""
+    from conan.internal.rest import file_uploader
+
+    if not hasattr(file_uploader, "FileProgress"):
+        return "file uploads"
+
+    class FileProgress(_ProgressFile):
+        def __init__(self, path, msg="Uploading", interval=None, *args, **kwargs):
+            scope = msg.removesuffix("Uploading").rstrip(": ")
+            super().__init__(
+                path,
+                "uploading",
+                kwargs.get("mode", "rb"),
+                scope=scope,
+                transfer=True,
+                only_if_read=True,
+            )
+
+    file_uploader.FileProgress = FileProgress
 
 
 # -- compression ---------------------------------------------------------------------------------
@@ -719,6 +849,7 @@ def _install():
         _patch_source_archives,
         _patch_package_downloads,
         _patch_downloads,
+        _patch_uploads,
         _patch_compression,
         _patch_git,
     )
@@ -736,10 +867,10 @@ def _install():
 
 
 try:
-    _theme, _render = _load_theme()
+    _theme, _render, _left_width = _load_theme()
 except Exception as e:  # noqa: BLE001 - a broken theme must not break conan
     ConanOutput().warning(
         f"[hook_progress] can't load progress theme, no progress: {e}"
     )
-    _theme = _render = None
+    _theme = _render = _left_width = None
 _install()
