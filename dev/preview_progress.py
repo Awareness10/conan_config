@@ -56,6 +56,7 @@ def preview(theme):
     os.environ["CONAN_PROGRESS_THEME"] = theme
     hook = load_hook()  # the theme is picked when the hook loads
     print(f"\n=== CONAN_PROGRESS_THEME={theme} ===", file=sys.stderr)
+    archive(hook, "cmake/3.31.12", "downloading", "conan_package.tgz", 45_100_000, 2.5)
     archive(hook, "cmake/3.31.12", "unpacking", "conan_package.tgz", 45_100_000, 2.5)
     archive(
         hook, "boost/1.86.0", "extracting", "boost_1_86_0.tar.bz2", 124_000_000, 3.0

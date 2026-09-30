@@ -11,7 +11,7 @@ Example Conan 2 configuration repo for testing `conan config install`.
 | `settings_user.yml` | Adds `os.Linux.distro` sub-setting |
 | `profiles/` | `base`, `linux-gcc-release`, `linux-gcc-debug`, `linux-clang-release`, `windows-msvc-release` |
 | `extensions/hooks/hook_check_license.py` | `pre_export` hook warning on missing `license` |
-| `extensions/hooks/hook_progress.py` | Progress for source extraction, package unpacking, archive compression (`conan upload`, `conan cache save`) and `git clone` (`CONAN_PROGRESS=0` disables) |
+| `extensions/hooks/hook_progress.py` | Progress for downloads, source extraction, package unpacking, archive compression (`conan upload`, `conan cache save`) and `git clone` (`CONAN_PROGRESS=0` disables) |
 | `extensions/hooks/progress_themes/` | Progress line themes: `paru` (default), `btop`; pick with `CONAN_PROGRESS_THEME` |
 | `dev/preview_progress.py` | Simulated preview of every theme (`python dev/preview_progress.py [theme]`); not installed |
 | `extensions/hooks/hook_timing.py` | Times source/generate/build/package per package; `Step times` section at exit (`CONAN_TIMING=0` disables) |

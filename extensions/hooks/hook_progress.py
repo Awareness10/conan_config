@@ -1,13 +1,15 @@
-"""Progress output for archive extraction/compression and git clone/fetch.
+"""Progress output for downloads, archive extraction/compression and git clone/fetch.
 
-Conan prints nothing while it extracts sources (`get`/`unzip`), unpacks
-downloaded packages, compresses packages for upload or runs `git clone`, so long
-steps look frozen. Hooks can only run before/after a whole step, so this module
+Conan prints little or nothing while it downloads files, extracts sources
+(`get`/`unzip`), unpacks downloaded packages, compresses packages for upload or
+runs `git clone`, so long steps look frozen. Hooks can only run before/after a whole step, so this module
 instead patches those Conan functions when Conan loads the hooks (once per
 command, before any recipe runs):
 
 - conan.tools.files `unzip()`/`get()`: .tar.* and .zip sources
 - package/recipe downloads from remotes (`tar_extract`)
+- file downloads (`FileDownloader`): recipes/packages from remotes, `download()`/`get()`
+  sources, `conan config install` archives; replaces Conan's every-10s "Downloaded" lines
 - `compress_files()`: the archive written by `conan upload`/`conan cache save`
 - conan.tools.scm `Git.clone()`/`Git.fetch_commit()`: git --progress, streamed
 
@@ -17,8 +19,9 @@ downloads), colored when Conan would color output:
      cmake/3.31.12 unpacking conan_package.tgz    43.0 MiB  17.2 MiB/s 00:01 [######------]  44%
 
 Operations that finish within half a second print nothing. On a terminal it
-draws a single updating line; otherwise (CI logs) it prints a line every 5
-seconds. Each patch checks the Conan internals it relies on and is
+draws a single updating line (parallel operations take turns: the first one owns
+the line, the others stay quiet until it finishes); otherwise (CI logs) it
+prints a line every 5 seconds. Each patch checks the Conan internals it relies on and is
 skipped, with one warning, if they changed.
 
 Environment variables:
@@ -45,6 +48,11 @@ _SHOW_AFTER = 0.5  # seconds; quicker operations print nothing
 
 # Package the current extraction belongs to, e.g. "cmake/3.31.12" (set by the patches)
 _scope = contextvars.ContextVar("progress_scope", default="")
+
+# On a TTY one line at a time: parallel downloads/uploads would overwrite each other's
+# line, so the first to draw owns it and the others stay quiet until it finishes
+_line_lock = threading.Lock()
+_line_owner = None
 
 
 def _enabled():
@@ -138,7 +146,24 @@ class _Progress:
         self._last = now
         self._draw()
 
+    def _owns_line(self):
+        global _line_owner
+        if not self._tty:
+            return True
+        with _line_lock:
+            if _line_owner is None:
+                _line_owner = self
+            return _line_owner is self
+
+    def _release_line(self):
+        global _line_owner
+        with _line_lock:
+            if _line_owner is self:
+                _line_owner = None
+
     def _draw(self):
+        if not self._owns_line():
+            return
         width = shutil.get_terminal_size().columns - 1 if self._tty else 100
         line = _render(_theme.layout(self.state), self.state, width, self._color)
         sys.stderr.write(("\r\x1b[2K" + line) if self._tty else (line + "\n"))
@@ -159,6 +184,7 @@ class _Progress:
         if self._drawn and self._tty:
             sys.stderr.write("\n")
             sys.stderr.flush()
+        self._release_line()
 
 
 class _ProgressFile(io.FileIO):
@@ -298,6 +324,136 @@ def _patch_package_downloads():
                 _scope.reset(token)
 
         remote_manager.uncompress_file = uncompress_file
+
+
+# -- downloads -----------------------------------------------------------------------------------
+
+# Progress of the download the current thread is running (set by the _download_file patch)
+_downloading = contextvars.ContextVar("progress_downloading", default=None)
+
+
+class _DownloadRequester:
+    """Stands in for FileDownloader's requester: counts what get() responses stream."""
+
+    def __init__(self, requester, progress):
+        self._requester, self._progress = requester, progress
+
+    def __getattr__(self, name):
+        return getattr(self._requester, name)
+
+    def get(self, url, **kwargs):
+        response = self._requester.get(url, **kwargs)
+        if not kwargs.get("stream") or not getattr(response, "ok", False):
+            return response
+        # a resumed download starts at the Content-Range offset, of the full size
+        headers = response.headers
+        m = re.match(r"^bytes (\d+)-\d+/(\d+)", headers.get("Content-Range", ""))
+        if m:
+            done, total = int(m[1]), int(m[2])
+        else:
+            done, total = 0, int(headers.get("Content-Length") or 0)
+        original_iter = response.iter_content
+        progress = self._progress
+
+        def iter_content(*args, **kw):
+            nonlocal done
+            for chunk in original_iter(*args, **kw):
+                done += len(chunk)
+                progress.update(done / total if total else 0.0, done, total)
+                yield chunk
+
+        response.iter_content = iter_content
+        return response
+
+
+class _QuietTimedOutput:
+    """FileDownloader's output minus its every-10s "Downloaded 12 MiB 30% x.tgz" lines."""
+
+    def __init__(self, output):
+        self._output = output
+
+    def __getattr__(self, name):
+        return getattr(self._output, name)
+
+    def info(self, msg, *args, **kwargs):
+        if not str(msg).startswith("Downloaded "):
+            self._output.info(msg, *args, **kwargs)
+
+
+class _WhileDownloading:
+    """FileDownloader attribute that reads back wrapped while this thread downloads.
+
+    Parallel downloads share one FileDownloader, so the attribute can't be swapped on
+    the instance; a contextvar tells each thread which download it is running.
+    """
+
+    def __init__(self, name, wrap):
+        self._name, self._wrap = name, wrap
+
+    def __get__(self, obj, owner=None):
+        if obj is None:
+            return self
+        value = obj.__dict__[self._name]
+        progress = _downloading.get()
+        return value if progress is None else self._wrap(value, progress)
+
+    def __set__(self, obj, value):
+        obj.__dict__[self._name] = value
+
+
+def _patch_downloads():
+    """Progress while Conan downloads recipes and packages from remotes, `download()`
+    sources and `conan config install` archives: all go through
+    FileDownloader._download_file(), which streams the response to disk.
+    """
+    import inspect
+
+    from conan.internal.rest import file_downloader
+
+    cls = getattr(file_downloader, "FileDownloader", None)
+    original = getattr(cls, "_download_file", None)
+    expected = [
+        "self",
+        "url",
+        "auth",
+        "headers",
+        "file_path",
+        "verify_ssl",
+        "try_resume",
+    ]
+    if original is None or list(inspect.signature(original).parameters) != expected:
+        return "file downloads"
+    if not {"_requester", "_output"} <= set(cls.__init__.__code__.co_names):
+        return "file downloads (FileDownloader attributes)"
+
+    def _download_file(
+        self, url, auth, headers, file_path, verify_ssl, try_resume=False
+    ):
+        def run():
+            return original(
+                self, url, auth, headers, file_path, verify_ssl, try_resume=try_resume
+            )
+
+        # resuming calls _download_file() again: keep the outer call's line
+        if not _enabled() or _downloading.get() is not None:
+            return run()
+        scope = getattr(self._output, "scope", "") or ""
+        progress = _Progress("downloading", os.path.basename(file_path), scope=scope)
+        token = _downloading.set(progress)
+        try:
+            result = run()
+        except BaseException:
+            progress.stop()
+            raise
+        else:
+            progress.done()
+            return result
+        finally:
+            _downloading.reset(token)
+
+    cls._requester = _WhileDownloading("_requester", _DownloadRequester)
+    cls._output = _WhileDownloading("_output", lambda out, _: _QuietTimedOutput(out))
+    cls._download_file = _download_file
 
 
 # -- compression ---------------------------------------------------------------------------------
@@ -502,6 +658,7 @@ def _install():
     patches = (
         _patch_source_archives,
         _patch_package_downloads,
+        _patch_downloads,
         _patch_compression,
         _patch_git,
     )
