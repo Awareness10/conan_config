@@ -19,7 +19,7 @@ class ClangClCrossConan(ConanFile):
 
     Use it as a tool_requires in a Windows host profile with compiler=clang and
     compiler.runtime set. It injects a CMake toolchain (user_toolchain) and the
-    compiler paths (tools.build:compiler_executables); llvm-mingw and msvc-sysroot
+    compiler paths (tools.build:compiler_executables); llvm and msvc-sysroot
     come with it.
     """
 
@@ -34,7 +34,7 @@ class ClangClCrossConan(ConanFile):
     exports_sources = "cmake/*"
 
     def requirements(self):
-        self.requires("llvm-mingw/20260922", run=True)
+        self.requires("llvm/23.1.2", run=True)
         self.requires("msvc-sysroot/14.44.17.14")
 
     def validate(self):
@@ -71,7 +71,7 @@ class ClangClCrossConan(ConanFile):
             self.settings_target.get_safe("arch") if self.settings_target else "x86_64"
         )
         triple, libarch = _TARGETS.get(arch, _TARGETS["x86_64"])
-        llvm_bin = os.path.join(self.dependencies["llvm-mingw"].package_folder, "bin")
+        llvm_bin = os.path.join(self.dependencies["llvm"].package_folder, "bin")
         msvc_sysroot = self.dependencies["msvc-sysroot"]
         sysroot = msvc_sysroot.package_folder
         # CRT 14.44 is the v144 toolset, i.e. MSVC 19.44 (_MSC_VER 1944). clang-cl can't

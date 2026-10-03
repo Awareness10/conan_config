@@ -4,6 +4,9 @@ arch=x86_64
 
 [conf]
 tools.build:skip_test=False
+# ICU 70's `make check` uses unittest.makeSuite, removed in Python 3.13. ICU 70 is
+# needed by the official LLVM binaries (llvm recipe in index/).
+icu/70.*:tools.build:skip_test=True
 
 [buildenv]
 {% if os.isatty(2) and os.getenv("NO_COLOR") is none and not os.getenv("CI") %}

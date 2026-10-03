@@ -1,6 +1,0 @@
-sources:
-  "20260922":  # LLVM 23.1.2
-    Linux:
-      x86_64:
-        url: "https://github.com/mstorsjo/llvm-mingw/releases/download/20260922/llvm-mingw-20260922-ucrt-ubuntu-22.04-x86_64.tar.xz"
-        sha256: "bb7bb7654b33d5aa8712acb837c963b2e0c56352560c76105270a3268c665c21"

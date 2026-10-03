@@ -1,6 +1,6 @@
 # Cross-compile for Windows x64 (MSVC ABI) from Linux with clang-cl + lld-link.
 # Every tool comes from Conan; nothing has to be installed on the machine:
-#   clang-cl-cross  toolchain glue -> llvm-mingw (LLVM 23) + msvc-sysroot (CRT/SDK via xwin)
+#   clang-cl-cross  toolchain glue -> llvm (official LLVM 23 release) + msvc-sysroot (CRT/SDK via xwin)
 #   wine            runs the Windows test programs (CMAKE_CROSSCOMPILING_EMULATOR)
 #   cmake, ninja    from ConanCenter
 # The recipes live in this config's index/ (remote "conan_config", added automatically).

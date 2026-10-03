@@ -10,7 +10,7 @@ Example Conan 2 configuration repo for testing `conan config install`.
 | `remotes.json` | Remotes: `conancenter` + a disabled placeholder internal remote |
 | `settings_user.yml` | Adds `os.Linux.distro` sub-setting |
 | `profiles/` | `base`, `linux-gcc-release`, `linux-gcc-debug`, `linux-clang-release`, `windows-msvc-release`, `windows-x64-clangcl` (cross from Linux, see below) |
-| `index/recipes/` | Recipes for the Windows cross toolchain (`xwin`, `msvc-sysroot`, `llvm-mingw`, `clang-cl-cross`, `wine`), served as the `conan_config` remote |
+| `index/recipes/` | Recipes for the Windows cross toolchain (`xwin`, `msvc-sysroot`, `llvm`, `clang-cl-cross`, `wine`), served as the `conan_config` remote |
 | `extensions/commands/recipes/cmd_index.py` | Adds `index/` as the `conan_config` local-recipes-index remote before every conan command + `conan recipes:index` |
 | `extensions/hooks/hook_check_license.py` | `pre_export` hook warning on missing `license` |
 | `extensions/hooks/hook_progress.py` | Progress for downloads, uploads, source extraction, package unpacking, archive compression (`conan upload`, `conan cache save`) and `git clone`; parallel operations get a line each (`CONAN_PROGRESS=0` disables) |
@@ -64,14 +64,39 @@ The profile's `[tool_requires]`:
 | Package | Version | What it is |
 |---------|---------|------------|
 | `clang-cl-cross` | 1.0 | Injects a CMake toolchain (`user_toolchain`) and the compiler paths (`tools.build:compiler_executables`); requires the next two |
-| `llvm-mingw` | 20260922 | clang/clang-cl, lld-link, llvm-lib, llvm-rc from LLVM 23.1.2 ([llvm-mingw](https://github.com/mstorsjo/llvm-mingw) release, 80 MB download, ~175 MB packaged) |
+| `llvm` | 23.1.2 | clang-cl, lld-link, llvm-lib, llvm-rc and llvm-mt from the [official LLVM release](https://github.com/llvm/llvm-project/releases/tag/llvmorg-23.1.2). The download is 1.1 GiB `.tar.zst` with Python ≥ 3.14, otherwise 1.9 GiB `.tar.xz`. Only the needed files are extracted, ~590 MB packaged. Bundles ICU 70.1 (from ConanCenter, built from source): the official binaries are built on Ubuntu 22.04, and lld/llvm-mt link its ICU 70 |
 | `msvc-sysroot` | 14.44.17.14 | MSVC CRT 14.44 + Windows SDK 10.0.26100 headers and import libraries, unpacked by `xwin` (~1.7 GB download, ~640 MB packaged) |
 | `xwin` | 0.10.0 | [xwin](https://github.com/Jake-Shadle/xwin), used to build `msvc-sysroot` |
-| `wine` | 11.18 | Portable WoW64 wine ([Kron4ek builds](https://github.com/Kron4ek/Wine-Builds), 100 MB download). Becomes `CMAKE_CROSSCOMPILING_EMULATOR`; `conan-wine` is wine with quiet defaults and its own prefix (`~/.cache/conan-wine-11.18`) |
+| `wine` | 11.18 | Portable WoW64 wine, vanilla (unpatched WineHQ source) from [Kron4ek's builds](https://github.com/Kron4ek/Wine-Builds), 100 MB download; see [Sources](#sources). Becomes `CMAKE_CROSSCOMPILING_EMULATOR`; `conan-wine` is wine with quiet defaults and its own prefix (`~/.cache/conan-wine-11.18`) |
 | `cmake`, `ninja` | ConanCenter | |
 
 All downloads are checked against SHA-256 hashes, except the CRT/SDK files, which
 xwin checks against Microsoft's manifest.
+
+### Sources
+
+Official sources are used wherever they exist:
+
+| Package | Source | How it's verified |
+|---------|--------|-------------------|
+| `llvm` | LLVM project's GitHub release | SHA-256 pinned. Build provenance checked when pinning: the archives are attested by `llvm/llvm-project`'s `release-binaries.yml` at the release tag (`gh attestation verify <archive> --repo llvm/llvm-project --bundle <archive>.jsonl`). Do this again when bumping the version |
+| ICU 70.1 (in `llvm`) | ConanCenter recipe, built from the official ICU source | ConanCenter's pinned hash |
+| `msvc-sysroot` | Microsoft's Visual Studio manifest, via xwin | xwin checks each file's hash from the manifest |
+| `xwin` | xwin's GitHub release (official) | SHA-256 pinned, matches the published `.sha256` |
+| `wine` | Kron4ek's builds (third party, see below) | SHA-256 pinned, matches the release's published `sha256sums.txt` |
+
+**Why wine is the exception:** WineHQ publishes only source code and distribution
+packages, not a portable build. Kron4ek's `vanilla` builds compile the official
+WineHQ source tarball without patches, inside Ubuntu 18.04 chroots, so they need
+only glibc 2.27 or newer. The build scripts are public (MIT). The trade-offs:
+
+- One maintainer.
+- The releases are built and uploaded by hand: no CI provenance and no signatures.
+- The pinned hash proves only that the file hasn't changed since it was pinned.
+
+The package is used only to run test programs. If that ever isn't enough, build
+it yourself with Kron4ek's `create_ubuntu_bootstraps.sh` + `build_wine.sh`, or
+write a recipe that builds wine from the WineHQ source.
 
 **Microsoft license:** `msvc-sysroot` downloads the MSVC CRT and Windows SDK, which
 are covered by the [Microsoft license](https://go.microsoft.com/fwlink/?LinkId=2086102).
@@ -84,7 +109,8 @@ so `conan upload` never redistributes it.
 `-c:a user.msvc_sysroot:cache_dir=/some/dir`.
 
 **Limits:** Release only, because xwin doesn't include the debug CRT. The tools
-are prebuilt for Linux x86_64 only.
+are prebuilt for Linux x86_64 only. `profiles/base` skips ICU 70's own tests
+(`icu/70.*:tools.build:skip_test=True`), which fail on Python ≥ 3.13.
 
 ### The `conan_config` remote
 

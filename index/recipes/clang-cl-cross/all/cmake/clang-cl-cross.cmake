@@ -30,6 +30,7 @@ set(CMAKE_CXX_COMPILER "${_bin}/clang-cl")
 set(CMAKE_RC_COMPILER  "${_bin}/llvm-rc")
 set(CMAKE_LINKER       "${_bin}/lld-link")
 set(CMAKE_AR           "${_bin}/llvm-lib")
+set(CMAKE_MT           "${_bin}/llvm-mt")
 
 set(_flags "--target=${CLANG_CL_CROSS_TRIPLE} -fms-compatibility-version=${CLANG_CL_CROSS_MSVC_VERSION}")
 foreach(_dir crt/include sdk/include/ucrt sdk/include/um sdk/include/shared sdk/include/winrt)
