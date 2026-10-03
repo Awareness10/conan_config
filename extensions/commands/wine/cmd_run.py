@@ -2,6 +2,7 @@
 
     conan wine:run app.exe [args...]
     conan wine:run --wine "[~11]" app.exe      # another wine version range
+    conan wine:run --wayland game.exe          # native Wayland window, not XWayland
 
 Installs wine as a tool (the newest wine/* from the conan_config remote, built
 from its recipe if needed; nothing to install by hand) and replaces this process
@@ -74,15 +75,28 @@ def run(conan_api, parser, *args):
     parser.add_argument(
         "--wine", default="[*]", help="wine version or range (default: newest)"
     )
+    parser.add_argument(
+        "--wayland",
+        action="store_true",
+        help="use wine's Wayland driver instead of X11/XWayland (windows are "
+        "placed by the compositor; fixes off-screen windows on e.g. Hyprland)",
+    )
     parsed = parser.parse_args(*args)
     if not sys.platform.startswith("linux"):
         raise ConanException("conan wine:run runs Windows programs on Linux")
     if not os.path.isfile(parsed.program):
         raise ConanException(f"No such file: {parsed.program}")
+    env = dict(os.environ)
+    if parsed.wayland:
+        if not env.get("WAYLAND_DISPLAY"):
+            raise ConanException("--wayland needs a Wayland session (WAYLAND_DISPLAY)")
+        # Wine picks its X11 driver whenever DISPLAY is set.
+        env.pop("DISPLAY", None)
 
     ref, folder = _install_wine(parsed.wine)
     wine = os.path.join(folder, "bin", "conan-wine")
-    ConanOutput().info(f"Running {parsed.program} with {ref}")
+    driver = " (Wayland)" if parsed.wayland else ""
+    ConanOutput().info(f"Running {parsed.program} with {ref}{driver}")
     sys.stdout.flush()
     sys.stderr.flush()
-    os.execv(wine, [wine, parsed.program, *parsed.args])
+    os.execve(wine, [wine, parsed.program, *parsed.args], env)
