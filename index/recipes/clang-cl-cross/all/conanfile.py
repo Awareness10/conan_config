@@ -35,7 +35,9 @@ class ClangClCrossConan(ConanFile):
 
     def requirements(self):
         self.requires("llvm/23.1.2", run=True)
-        self.requires("msvc-sysroot/14.44.17.14")
+        # run=True: the sysroot is used while building, not linked into anything, so
+        # without it Conan skips its binary and package_info() gets no package_folder.
+        self.requires("msvc-sysroot/14.44.17.14", run=True)
 
     def validate(self):
         target = self.settings_target
