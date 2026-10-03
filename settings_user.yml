@@ -2,3 +2,8 @@
 os:
   Linux:
     distro: [null, "ubuntu22.04", "ubuntu24.04", "arch"]
+# Clang 23 (windows-x64-clangcl) is only in the default settings.yml of Conan >= 2.33;
+# adding it here lets older Conan 2 versions (e.g. Arch's conan 2.32) use the profile.
+compiler:
+  clang:
+    version: ["23"]

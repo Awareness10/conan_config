@@ -50,8 +50,10 @@ forces a check now.
 ## Cross-compiling for Windows (`windows-x64-clangcl`)
 
 Builds Windows x64 binaries (MSVC ABI) on Linux with clang-cl and lld-link, and
-runs their tests under wine. Conan provides every tool; only Conan itself must be
-installed (2.33.0 or newer: the profile uses `compiler.version=23`).
+runs their tests under wine. Conan provides every tool; only Conan 2 itself must
+be installed. The profile uses `compiler.version=23`, which is in Conan's default
+settings from 2.33 on. `settings_user.yml` adds it for older versions, so Arch's
+`conan` 2.32 works too (tested).
 
 ```bash
 conan install . -pr:h windows-x64-clangcl --build=missing \
