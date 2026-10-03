@@ -73,11 +73,17 @@ class MsvcSysrootConan(ConanFile):
         cache = self.conf.get("user.msvc_sysroot:cache_dir") or os.path.join(
             self.build_folder, "xwin-cache"
         )
-        self.run(
+        xwin = (
             f"xwin --accept-license --manifest-version {data['manifest']}"
             f" --crt-version {data['crt']} --sdk-version {data['sdk']}"
             f' --arch {_XWIN_ARCH[self._target_arch()]} --cache-dir "{cache}"'
-            f' splat --copy --output "{self.package_folder}"'
+        )
+        # Download and unpack in parallel, then splat on one thread: xwin 0.10.0
+        # creates the sdk/include/<version> symlink with check-then-create from
+        # parallel threads, which fails ~3% of the time with "File exists".
+        self.run(f"{xwin} unpack")
+        self.run(
+            f'RAYON_NUM_THREADS=1 {xwin} splat --copy --output "{self.package_folder}"'
         )
         save(
             self,
