@@ -48,13 +48,25 @@ def _registered():
     )
 
 
+def _conan(*args):
+    """The command line that runs conan again, with this Python and this Conan.
+
+    Same as in sync/cmd_config.py (command modules can't import each other): a
+    frozen conan (conan-bin, Conan's installers) is the interpreter and Conan in
+    one; otherwise not sys.argv[0], which on Windows is a path that doesn't exist.
+    """
+    if getattr(sys, "frozen", False):
+        return [sys.executable, *args]
+    # -P (3.11+): -m would put the current folder first on sys.path
+    safe_path = ["-P"] if sys.version_info >= (3, 11) else []
+    return [sys.executable, *safe_path, "-m", "conans.conan", *args]
+
+
 def register():
     """Add (or fix) the remote; returns True when it is registered afterwards."""
     if _registered():
         return True
-    cmd = [
-        sys.executable,
-        sys.argv[0],
+    cmd = _conan(
         "remote",
         "add",
         REMOTE_NAME,
@@ -62,7 +74,7 @@ def register():
         "--type=local-recipes-index",
         "--index=0",
         "--force",
-    ]
+    )
     env = {**os.environ, _SKIP_ENV: "1", "CONAN_CONFIG_SYNC_SKIP": "1"}
     result = subprocess.run(cmd, check=False, capture_output=True, text=True, env=env)
     if result.returncode != 0:
