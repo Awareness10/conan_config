@@ -1,0 +1,6 @@
+sources:
+  "0.10.0":
+    Linux:
+      x86_64:
+        url: "https://github.com/Jake-Shadle/xwin/releases/download/0.10.0/xwin-0.10.0-x86_64-unknown-linux-musl.tar.gz"
+        sha256: "d870eb4b2f390878af6da1ccd3cf321d22fcb72720984853b4be732ae597fc88"

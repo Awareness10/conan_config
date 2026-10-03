@@ -1,0 +1,32 @@
+# Cross-compile for Windows x64 (MSVC ABI) from Linux with clang-cl + lld-link.
+# Every tool comes from Conan; nothing has to be installed on the machine:
+#   clang-cl-cross  toolchain glue -> llvm (official LLVM 23 release) + msvc-sysroot (CRT/SDK via xwin)
+#   wine            runs the Windows test programs (CMAKE_CROSSCOMPILING_EMULATOR)
+#   cmake, ninja    from ConanCenter
+# The recipes live in this config's index/ (remote "conan_config", added automatically).
+#
+#   conan install . -pr:h windows-x64-clangcl --build=missing \
+#       -c:a user.msvc_sysroot:accept_license=True      # first time: Microsoft CRT/SDK license
+#
+# Release only: xwin does not ship the debug CRT.
+
+[settings]
+os=Windows
+arch=x86_64
+compiler=clang
+compiler.version=23
+compiler.runtime=dynamic
+compiler.runtime_type=Release
+compiler.runtime_version=v144
+compiler.cppstd=20
+build_type=Release
+
+[tool_requires]
+clang-cl-cross/1.0
+wine/11.18
+cmake/[>=3.27 <5]
+ninja/[>=1.12 <2]
+
+[conf]
+tools.cmake.cmaketoolchain:generator=Ninja
+tools.build:skip_test=False

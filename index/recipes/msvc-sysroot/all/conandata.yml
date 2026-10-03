@@ -1,0 +1,7 @@
+# The CRT/SDK pair xwin downloads from Microsoft's Visual Studio 17 release manifest.
+# Microsoft eventually drops old CRT versions from the manifest; bump the version then.
+versions:
+  "14.44.17.14":
+    crt: "14.44.17.14"
+    sdk: "10.0.26100"
+    manifest: "17"

@@ -1,0 +1,17 @@
+# Official LLVM release binaries. Both archives are covered by the release's
+# GitHub build attestation (llvm/llvm-project, release-binaries.yml):
+#   gh attestation verify <archive> --repo llvm/llvm-project --bundle <archive>.jsonl
+sources:
+  "23.1.2":
+    Linux:
+      x86_64:
+        zst:  # 1.1 GiB, needs Python >= 3.14
+          url: "https://github.com/llvm/llvm-project/releases/download/llvmorg-23.1.2/LLVM-23.1.2-Linux-X64.tar.zst"
+          sha256: "6382de1c1a210ce5a5cc49d18bc8444d137742e7cbf9b19f4ae602bb1ab52534"
+        xz:  # 1.9 GiB
+          url: "https://github.com/llvm/llvm-project/releases/download/llvmorg-23.1.2/LLVM-23.1.2-Linux-X64.tar.xz"
+          sha256: "b5ed9675149cc837c282e9b6962c276c9fa62863d5b2f91537b60848552995b7"
+license:
+  "23.1.2":
+    url: "https://raw.githubusercontent.com/llvm/llvm-project/llvmorg-23.1.2/llvm/LICENSE.TXT"
+    sha256: "8d85c1057d742e597985c7d4e6320b015a9139385cff4cbae06ffc0ebe89afee"

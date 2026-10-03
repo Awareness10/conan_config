@@ -1,0 +1,6 @@
+sources:
+  "11.18":  # Kron4ek's portable builds; the WoW64 one needs no 32-bit host libraries
+    Linux:
+      x86_64:
+        url: "https://github.com/Kron4ek/Wine-Builds/releases/download/11.18/wine-11.18-amd64-wow64.tar.xz"
+        sha256: "f899879b8c37e0b20adca19d147cf77436f3f1a37bf16d08d27fa7137a52b9ba"
