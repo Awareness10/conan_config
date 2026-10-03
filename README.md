@@ -12,6 +12,7 @@ Example Conan 2 configuration repo for testing `conan config install`.
 | `profiles/` | `base`, `linux-gcc-release`, `linux-gcc-debug`, `linux-clang-release`, `windows-msvc-release`, `windows-x64-clangcl` (cross from Linux, see below) |
 | `index/recipes/` | Recipes for the Windows cross toolchain (`xwin`, `msvc-sysroot`, `llvm`, `clang-cl-cross`, `wine`), served as the `conan_config` remote |
 | `extensions/commands/recipes/cmd_index.py` | Adds `index/` as the `conan_config` local-recipes-index remote before every conan command + `conan recipes:index` |
+| `extensions/commands/wine/cmd_run.py` | `conan wine:run app.exe [args]`: runs a Windows program with the `wine` package (Linux) |
 | `extensions/hooks/hook_check_license.py` | `pre_export` hook warning on missing `license` |
 | `extensions/hooks/hook_progress.py` | Progress for downloads, uploads, source extraction, package unpacking, archive compression (`conan upload`, `conan cache save`) and `git clone`; parallel operations get a line each (`CONAN_PROGRESS=0` disables) |
 | `extensions/hooks/progress_themes/` | Progress line themes: `paru` (default), `btop`; pick with `CONAN_PROGRESS_THEME` |
@@ -113,6 +114,26 @@ so `conan upload` never redistributes it.
 **Limits:** Release only, because xwin doesn't include the debug CRT. The tools
 are prebuilt for Linux x86_64 only. `profiles/base` skips ICU 70's own tests
 (`icu/70.*:tools.build:skip_test=True`), which fail on Python ≥ 3.13.
+
+### Running Windows programs: `conan wine:run`
+
+```bash
+conan wine:run build/Release/app.exe --some-arg
+conan wine:run --wine "[~11]" app.exe      # another wine version or range
+```
+
+The command:
+
+- **Installs wine:** the newest `wine/*` from the `conan_config` remote, as a tool.
+  It's built from the recipe the first time, then reused from the cache.
+- **Runs the program with `conan-wine`:** its own prefix in
+  `~/.cache/conan-wine-<version>`, no debug output, and no Mono/Gecko prompts.
+  Set `WINEPREFIX` or `WINEDEBUG` to override those.
+- **Hands over the process:** the program's exit code becomes conan's, so the
+  command works in scripts.
+
+It works with every Conan setup: the pacman/pip package, a venv, or a standalone
+`conan-bin`. You don't need to install wine yourself.
 
 ### The `conan_config` remote
 
