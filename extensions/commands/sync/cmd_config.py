@@ -83,6 +83,20 @@ def _write_rev(rev):
         f.write(rev + "\n")
 
 
+def _conan(*args):
+    """The command line that runs conan again, with this Python and this Conan.
+
+    Not sys.argv[0]: on Windows it's the conan.exe launcher with ".exe" stripped by
+    pip's wrapper script, a path that doesn't exist. Conan's own Windows installer
+    is a frozen conan.exe, which is the interpreter and Conan in one.
+    """
+    if getattr(sys, "frozen", False):
+        return [sys.executable, *args]
+    # -P (3.11+): -m would put the current folder first on sys.path
+    safe_path = ["-P"] if sys.version_info >= (3, 11) else []
+    return [sys.executable, *safe_path, "-m", "conans.conan", *args]
+
+
 def _remote_rev():
     try:
         result = subprocess.run(
@@ -112,15 +126,9 @@ def _install(rev):
         (_short(rev), Color.BRIGHT_GREEN),
     )
     _say("   running ", ("conan config install", Color.BRIGHT_BLUE), f" {CONFIG_REPO}")
-    cmd = [
-        sys.executable,
-        sys.argv[0],
-        "config",
-        "install",
-        CONFIG_REPO,
-        "--type=git",
-        f"--args=-b {CONFIG_BRANCH}",
-    ]
+    cmd = _conan(
+        "config", "install", CONFIG_REPO, "--type=git", f"--args=-b {CONFIG_BRANCH}"
+    )
     result = subprocess.run(
         cmd,
         check=False,
@@ -147,7 +155,7 @@ def _install(rev):
 
 
 def sync(force=False):
-    """Returns 'updated', 'up-to-date' or 'offline'."""
+    """Returns 'updated', 'up-to-date', 'offline' or 'failed' (install failed)."""
     rev_file = _rev_file()
     if not force:
         interval = int(os.environ.get("CONAN_CONFIG_SYNC_INTERVAL", "1800"))
@@ -162,7 +170,7 @@ def sync(force=False):
     if remote == _read_rev():
         os.utime(rev_file)  # mtime is the last-check time for the interval
         return "up-to-date"
-    return "updated" if _install(remote) else "offline"
+    return "updated" if _install(remote) else "failed"
 
 
 def _auto_sync():
@@ -179,7 +187,12 @@ def _auto_sync():
         os.environ[_SKIP_ENV] = "1"
         sys.stdout.flush()
         sys.stderr.flush()
-        os.execv(sys.executable, [sys.executable, *sys.argv])
+        cmd = _conan(*sys.argv[1:])
+        if os.name == "nt":
+            # Windows execv starts a new process and exits this one: the shell would
+            # get its prompt back while conan still runs, and args with spaces split
+            sys.exit(subprocess.call(cmd))
+        os.execv(cmd[0], cmd)
 
 
 _auto_sync()
@@ -196,6 +209,8 @@ def config(conan_api, parser, *args):
         return  # _install() already reported the new revision
     rev = (_short(_read_rev()), Color.BRIGHT_GREEN)
     branch = (CONFIG_BRANCH, Color.BRIGHT_CYAN)
+    if status == "failed":
+        return  # _install() already warned
     if status == "up-to-date":
         _say(
             (":: ", Color.BRIGHT_BLUE),
