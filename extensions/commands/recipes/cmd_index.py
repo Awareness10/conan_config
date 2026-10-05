@@ -101,7 +101,7 @@ def _auto_register():
 _auto_register()
 
 
-@conan_command(group="Custom commands")
+@conan_command(group="Custom")
 def index(conan_api, parser, *args):
     """
     Add the 'conan_config' remote for the recipes shipped in this config (index/).

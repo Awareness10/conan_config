@@ -65,7 +65,7 @@ def _install_wine(version_range):
     raise ConanException("conan install did not return the wine package folder")
 
 
-@conan_command(group="Custom commands")
+@conan_command(group="Custom")
 def run(conan_api, parser, *args):
     """
     Run a Windows program with wine from the conan_config recipes (Linux only).

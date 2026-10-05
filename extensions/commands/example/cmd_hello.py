@@ -2,7 +2,7 @@ from conan.api.output import ConanOutput
 from conan.cli.command import conan_command
 
 
-@conan_command(group="Custom commands")
+@conan_command(group="Custom")
 def hello(conan_api, parser, *args):
     """
     Example custom command installed from the conan_config repo.

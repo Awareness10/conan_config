@@ -198,7 +198,7 @@ def _auto_sync():
 _auto_sync()
 
 
-@conan_command(group="Custom commands")
+@conan_command(group="Custom")
 def config(conan_api, parser, *args):
     """
     Check the conan_config repo now and reinstall it if the remote has new commits.
