@@ -121,6 +121,7 @@ are prebuilt for Linux x86_64 only. `profiles/base` skips ICU 70's own tests
 conan wine:run build/Release/app.exe --some-arg
 conan wine:run --wine "[~11]" app.exe      # another wine version or range
 conan wine:run --wayland game.exe          # GUI programs on a Wayland desktop
+conan wine:run --x11 game.exe              # force X11 (XWayland on a Wayland desktop)
 ```
 
 The command:
@@ -136,18 +137,49 @@ The command:
 It works with every Conan setup: the pacman/pip package, a venv, or a standalone
 `conan-bin`. You don't need to install wine yourself.
 
-**GUI programs on Wayland: use `--wayland`.** By default wine draws through
-XWayland, and the compositor's and XWayland's idea of the monitor layout can
-differ. On Hyprland with two monitors, XWayland listed them in the opposite order,
-so a game centred on "monitor 0" landed at x = −1440, off every screen.
+#### GUI programs: `--wayland` or `--x11`
 
-`--wayland` removes `DISPLAY`, so wine uses its native Wayland driver
-(`winewayland`). The compositor then places the window, and it opens on-screen.
-OpenGL still runs on the real GPU (tested with an NVIDIA RTX 4070 Ti SUPER).
+Wine has two graphics drivers on Linux: X11 (`winex11`) and Wayland
+(`winewayland`). Without a flag, wine uses X11 whenever `DISPLAY` is set, so on a
+Wayland desktop it draws through XWayland. The flags choose the driver:
+
+| | no flag | `--wayland` | `--x11` |
+|---|---|---|---|
+| Driver | X11 if `DISPLAY` is set, else Wayland | Wayland | X11 only |
+| Environment | unchanged | removes `DISPLAY` | removes `WAYLAND_DISPLAY` |
+| Needs | either | `WAYLAND_DISPLAY` | `DISPLAY` |
+| Window placement | the program (XWayland's monitor layout) | the compositor | the program (XWayland's monitor layout) |
+
+The two flags can't be combined.
+
+**Use `--wayland` when** the window opens off-screen or on the wrong monitor on a
+Wayland desktop. The compositor's and XWayland's idea of the monitor layout can
+differ. On Hyprland with two monitors, XWayland listed them in the opposite order,
+so a game centred on "monitor 0" landed at x = −1440, off every screen. With
+`--wayland`, the compositor places the window, and it opens on-screen. OpenGL
+still runs on the real GPU (tested with an NVIDIA RTX 4070 Ti SUPER).
 
 One harmless message may appear: `listener function for opcode 3 of
 zwlr_data_control_device_v1 is NULL`. It comes from wine's clipboard helper; the
 program keeps running.
+
+**Use `--x11` when** the program needs control over its own windows, or misbehaves
+under the Wayland driver. X11 is wine's older, more complete driver. Wayland
+doesn't let programs place their own windows or read global screen coordinates,
+so these behave as intended only on X11:
+
+- programs that position their own windows, for example to restore saved window
+  positions or to put a tool palette next to the main window
+- programs that rely on features `winewayland` doesn't support yet
+
+`--x11` fails early if there is no `DISPLAY`. It removes `WAYLAND_DISPLAY`, so
+wine can't fall back to Wayland. Without a flag, wine already prefers X11, so the
+flag mainly makes that choice explicit and strict. Neither flag overrides a
+`Graphics` driver setting in the wine prefix's registry.
+
+**Rule of thumb:** start without a flag. If the window is misplaced on a Wayland
+desktop, try `--wayland`. If something breaks under `--wayland`, go back with
+`--x11`.
 
 ### The `conan_config` remote
 
