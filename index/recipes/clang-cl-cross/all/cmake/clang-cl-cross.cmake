@@ -39,6 +39,14 @@ endforeach()
 set(CMAKE_C_FLAGS_INIT   "${_flags}")
 set(CMAKE_CXX_FLAGS_INIT "${_flags}")
 
+# .rc files (winver.h etc.): CMake passes the RC flags to both the clang-cl
+# preprocessor and llvm-rc, so they must be plain -I that both accept.
+set(_rc_flags "")
+foreach(_dir crt/include sdk/include/ucrt sdk/include/um sdk/include/shared)
+    string(APPEND _rc_flags " -I \"${_root}/${_dir}\"")
+endforeach()
+set(CMAKE_RC_FLAGS_INIT "${_rc_flags}")
+
 set(_libpaths "")
 foreach(_dir crt/lib/${_arch} sdk/lib/um/${_arch} sdk/lib/ucrt/${_arch})
     string(APPEND _libpaths " /libpath:\"${_root}/${_dir}\"")
