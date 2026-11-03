@@ -31,6 +31,13 @@ set(CMAKE_RC_COMPILER  "${_bin}/llvm-rc")
 set(CMAKE_LINKER       "${_bin}/lld-link")
 set(CMAKE_AR           "${_bin}/llvm-lib")
 set(CMAKE_MT           "${_bin}/llvm-mt")
+# MASM (enable_language(ASM_MASM)): llvm-ml64/llvm-ml stand in for ml64/ml.
+# llvm-ml is x86 only; ARM64 would need armasm64, which LLVM doesn't have.
+if(_arch STREQUAL "x86_64")
+    set(CMAKE_ASM_MASM_COMPILER "${_bin}/llvm-ml64")
+elseif(_arch STREQUAL "x86")
+    set(CMAKE_ASM_MASM_COMPILER "${_bin}/llvm-ml")
+endif()
 
 set(_flags "--target=${CLANG_CL_CROSS_TRIPLE} -fms-compatibility-version=${CLANG_CL_CROSS_MSVC_VERSION}")
 foreach(_dir crt/include sdk/include/ucrt sdk/include/um sdk/include/shared sdk/include/winrt)

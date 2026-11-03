@@ -67,7 +67,7 @@ The profile's `[tool_requires]`:
 | Package | Version | What it is |
 |---------|---------|------------|
 | `clang-cl-cross` | 1.0 | Injects a CMake toolchain (`user_toolchain`) and the compiler paths (`tools.build:compiler_executables`); requires the next two |
-| `llvm` | 23.1.2 | clang-cl, lld-link, llvm-lib, llvm-rc and llvm-mt from the [official LLVM release](https://github.com/llvm/llvm-project/releases/tag/llvmorg-23.1.2). The download is 1.1 GiB `.tar.zst` with Python ≥ 3.14, otherwise 1.9 GiB `.tar.xz`. Only the needed files are extracted, ~590 MB packaged. Bundles ICU 70.1 (from ConanCenter, built from source): the official binaries are built on Ubuntu 22.04, and lld/llvm-mt link its ICU 70 |
+| `llvm` | 23.1.2 | clang-cl, lld-link, llvm-lib, llvm-rc, llvm-mt and llvm-ml (MASM) from the [official LLVM release](https://github.com/llvm/llvm-project/releases/tag/llvmorg-23.1.2). The download is 1.1 GiB `.tar.zst` with Python ≥ 3.14, otherwise 1.9 GiB `.tar.xz`. Only the needed files are extracted, ~640 MB packaged. Bundles ICU 70.1 (from ConanCenter, built from source): the official binaries are built on Ubuntu 22.04, and lld/llvm-mt link its ICU 70 |
 | `msvc-sysroot` | 14.44.17.14 | MSVC CRT 14.44 + Windows SDK 10.0.26100 headers and import libraries, unpacked by `xwin` (~1.7 GB download, ~640 MB packaged) |
 | `xwin` | 0.10.0 | [xwin](https://github.com/Jake-Shadle/xwin), used to build `msvc-sysroot` |
 | `wine` | 11.18 | Portable WoW64 wine, vanilla (unpatched WineHQ source) from [Kron4ek's builds](https://github.com/Kron4ek/Wine-Builds), 100 MB download; see [Sources](#sources). Becomes `CMAKE_CROSSCOMPILING_EMULATOR`; `conan-wine` is wine with quiet defaults and its own prefix (`~/.cache/conan-wine-11.18`) |
