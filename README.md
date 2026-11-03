@@ -10,7 +10,7 @@ Example Conan 2 configuration repo for testing `conan config install`.
 | `remotes.json` | Remotes: `conancenter` + a disabled placeholder internal remote |
 | `settings_user.yml` | Adds `os.Linux.distro` sub-setting |
 | `profiles/` | `base`, `linux-gcc-release`, `linux-gcc-debug`, `linux-clang-release`, `windows-msvc-release`, `windows-x64-clangcl` (cross from Linux, see below) |
-| `index/recipes/` | Recipes for the Windows cross toolchain (`xwin`, `msvc-sysroot`, `llvm`, `clang-cl-cross`, `wine`), served as the `conan_config` remote |
+| `index/recipes/` | Recipes for the Windows cross toolchain (`xwin`, `msvc-sysroot`, `llvm`, `clang-cl-cross`, `wine`) and `libxml2` (2.15.x, Linux + Windows), served as the `conan_config` remote |
 | `extensions/commands/recipes/cmd_index.py` | Adds `index/` as the `conan_config` local-recipes-index remote before every conan command + `conan recipes:index` |
 | `extensions/commands/wine/cmd_run.py` | `conan wine:run app.exe [args]`: runs a Windows program with the `wine` package (Linux) |
 | `extensions/hooks/hook_check_license.py` | `pre_export` hook warning on missing `license` |
