@@ -31,6 +31,13 @@ set(CMAKE_RC_COMPILER  "${_bin}/llvm-rc")
 set(CMAKE_LINKER       "${_bin}/lld-link")
 set(CMAKE_AR           "${_bin}/llvm-lib")
 set(CMAKE_MT           "${_bin}/llvm-mt")
+# MASM (enable_language(ASM_MASM)): llvm-ml64/llvm-ml stand in for ml64/ml.
+# llvm-ml is x86 only; ARM64 would need armasm64, which LLVM doesn't have.
+if(_arch STREQUAL "x86_64")
+    set(CMAKE_ASM_MASM_COMPILER "${_bin}/llvm-ml64")
+elseif(_arch STREQUAL "x86")
+    set(CMAKE_ASM_MASM_COMPILER "${_bin}/llvm-ml")
+endif()
 
 set(_flags "--target=${CLANG_CL_CROSS_TRIPLE} -fms-compatibility-version=${CLANG_CL_CROSS_MSVC_VERSION}")
 foreach(_dir crt/include sdk/include/ucrt sdk/include/um sdk/include/shared sdk/include/winrt)
@@ -38,6 +45,14 @@ foreach(_dir crt/include sdk/include/ucrt sdk/include/um sdk/include/shared sdk/
 endforeach()
 set(CMAKE_C_FLAGS_INIT   "${_flags}")
 set(CMAKE_CXX_FLAGS_INIT "${_flags}")
+
+# .rc files (winver.h etc.): CMake passes the RC flags to both the clang-cl
+# preprocessor and llvm-rc, so they must be plain -I that both accept.
+set(_rc_flags "")
+foreach(_dir crt/include sdk/include/ucrt sdk/include/um sdk/include/shared)
+    string(APPEND _rc_flags " -I \"${_root}/${_dir}\"")
+endforeach()
+set(CMAKE_RC_FLAGS_INIT "${_rc_flags}")
 
 set(_libpaths "")
 foreach(_dir crt/lib/${_arch} sdk/lib/um/${_arch} sdk/lib/ucrt/${_arch})

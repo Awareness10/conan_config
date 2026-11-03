@@ -24,14 +24,16 @@ _KEEP = [
     "bin/llvm-ranlib",
     "bin/llvm-rc",
     "bin/llvm-mt",
+    "bin/llvm-ml",
+    "bin/llvm-ml64",  # llvm-ml in 64-bit mode, like MASM's ml64
     "bin/llvm-cvtres",
     "lib/clang/*/include/*",
 ]
 
 
 class LlvmConan(ConanFile):
-    """clang/clang-cl, lld/lld-link, llvm-lib, llvm-rc and llvm-mt from the official
-    LLVM release (~550 MB packaged).
+    """clang/clang-cl, lld/lld-link, llvm-lib, llvm-rc, llvm-mt and llvm-ml from the
+    official LLVM release (~640 MB packaged).
 
     The official Linux binaries are built on Ubuntu 22.04: lld and llvm-mt link
     ICU 70 (through libxml2), which newer distributions don't have. ICU 70.1 from
