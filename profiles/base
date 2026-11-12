@@ -7,6 +7,10 @@ tools.build:skip_test=False
 # ICU 70's `make check` uses unittest.makeSuite, removed in Python 3.13. ICU 70 is
 # needed by the official LLVM binaries (llvm recipe in index/).
 icu/70.*:tools.build:skip_test=True
+# ConanCenter's glib leaves introspection on "auto": it then uses the machine's own
+# gobject-introspection, whose scanner can load the system's GIO modules (gvfs) and
+# fail. Nothing here needs GLib's .gir/.typelib files.
+glib/*:tools.meson.mesontoolchain:extra_variables={"project_options": {"introspection": "disabled"}}
 
 [buildenv]
 {% if os.isatty(2) and os.getenv("NO_COLOR") is none and not os.getenv("CI") %}
