@@ -1,5 +1,5 @@
 # Official release tarballs from https://gstreamer.freedesktop.org/src/; the hashes
-# match the published .sha256sum files. All four modules always share one version.
+# match the published .sha256sum files. All modules always share one version.
 sources:
   "1.28.9":
     gstreamer:
@@ -14,3 +14,6 @@ sources:
     gst-plugins-bad:
       url: "https://gstreamer.freedesktop.org/src/gst-plugins-bad/gst-plugins-bad-1.28.9.tar.xz"
       sha256: "4a4e0b7bf84f868378c48f143a7ac3a98923b488a5b74f1a35ba46bc3c43f6b1"
+    gst-rtsp-server:
+      url: "https://gstreamer.freedesktop.org/src/gst-rtsp-server/gst-rtsp-server-1.28.9.tar.xz"
+      sha256: "b87ed564d857a226a3135bd2c42eae7b40eb64031cb9cbce124722af92cc8b9d"

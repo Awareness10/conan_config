@@ -10,7 +10,7 @@ Example Conan 2 configuration repo for testing `conan config install`.
 | `remotes.json` | Remotes: `conancenter` + a disabled placeholder internal remote |
 | `settings_user.yml` | Adds `os.Linux.distro` sub-setting |
 | `profiles/` | `base`, `linux-gcc-release`, `linux-gcc-debug`, `linux-clang-release`, `windows-msvc-release`, `windows-x64-clangcl` (cross from Linux, see below), `jetson-orin` (cross for Jetson, see [GStreamer](#gstreamer-gst-plugins)) |
-| `index/recipes/` | Recipes for the Windows cross toolchain (`xwin`, `msvc-sysroot`, `llvm`, `clang-cl-cross`, `wine`), `libxml2` (2.15.x, Linux + Windows) and `gst-plugins` (GStreamer 1.28.9, Linux), served as the `conan_config` remote |
+| `index/recipes/` | Recipes for the Windows cross toolchain (`xwin`, `msvc-sysroot`, `llvm`, `clang-cl-cross`, `wine`), `libxml2` (2.15.x, Linux + Windows) and `gst-plugins` (GStreamer 1.28.9 + gst-rtsp-server, Linux), served as the `conan_config` remote |
 | `extensions/commands/recipes/cmd_index.py` | Adds `index/` as the `conan_config` local-recipes-index remote before every conan command + `conan recipes:index` |
 | `extensions/commands/wine/cmd_run.py` | `conan wine:run app.exe [args]`: runs a Windows program with the `wine` package (Linux) |
 | `extensions/hooks/hook_check_license.py` | `pre_export` hook warning on missing `license` |
@@ -199,11 +199,12 @@ in the [conan-dev](../conan-dev) sandbox.
 
 ## GStreamer: `gst-plugins`
 
-One package holds GStreamer core plus gst-plugins-base, -good and -bad, built from
-the four official tarballs on <https://gstreamer.freedesktop.org/src/>. They're
+One package holds GStreamer core plus gst-plugins-base, -good, -bad and
+gst-rtsp-server, built from the five official tarballs on
+<https://gstreamer.freedesktop.org/src/>. They're
 unpacked as Meson subprojects of a two-line parent project, the way the GStreamer
 monorepo builds them: one configure, one build, and the modules always have the
-same version. Bumping it means a new `conandata.yml` entry with four URLs and hashes.
+same version. Bumping it means a new `conandata.yml` entry with five URLs and hashes.
 
 ```bash
 conan create index/recipes/gst-plugins/all --version 1.28.9 --build=missing
@@ -249,7 +250,7 @@ provides those libraries. `gst-inspect-1.0 nvcodec` shows what registered.
 
 **Consumers:** `find_package(GStreamer)` gives one target per library, named after
 its pkg-config module: `GStreamer::gstreamer`, `GStreamer::app`, `GStreamer::video`,
-`GStreamer::gl`, and so on. PkgConfigDeps gives the upstream names
+`GStreamer::gl`, `GStreamer::rtsp-server`, and so on. PkgConfigDeps gives the upstream names
 (`gstreamer-1.0`, `gstreamer-video-1.0`, ...). The components come from the
 installed `.pc` files, so they follow the options with no hand-kept list. The
 run environment (`conanrun`) points `GST_PLUGIN_SYSTEM_PATH_1_0` and

@@ -12,7 +12,13 @@ from conan.tools.meson import Meson, MesonToolchain
 
 required_conan_version = ">=2.4"
 
-MODULES = ("gstreamer", "gst-plugins-base", "gst-plugins-good", "gst-plugins-bad")
+MODULES = (
+    "gstreamer",
+    "gst-plugins-base",
+    "gst-plugins-good",
+    "gst-plugins-bad",
+    "gst-rtsp-server",
+)
 
 # fmt: off
 # Plugins built without any optional dependency. Everything else is off: the build
@@ -38,6 +44,7 @@ PLUGINS = {
         "mpegtsdemux", "mpegtsmux", "rtp", "sdp", "shm", "switchbin", "timecode",
         "unixfd", "videofilters", "videoparsers",
     ),
+    "gst-rtsp-server": ("rtspclientsink",),
 }
 
 # System libraries taken from the build machine (native) or the sysroot (cross),
@@ -57,9 +64,9 @@ def pc_requires(value):
 
 
 class GstPluginsConan(ConanFile):
-    """GStreamer core + gst-plugins-base/good/bad in one package, one version.
+    """GStreamer core + gst-plugins-base/good/bad + gst-rtsp-server in one package.
 
-    The four official release tarballs are unpacked as Meson subprojects of a
+    The five official release tarballs are unpacked as Meson subprojects of a
     two-line parent project, the same way the GStreamer monorepo builds them: one
     configure, one ninja run, and the modules always match each other.
 
@@ -76,11 +83,13 @@ class GstPluginsConan(ConanFile):
     """
 
     name = "gst-plugins"
-    description = "GStreamer core with gst-plugins-base, -good and -bad"
+    description = (
+        "GStreamer core with gst-plugins-base, -good, -bad and gst-rtsp-server"
+    )
     license = "LGPL-2.1-or-later"
     homepage = "https://gstreamer.freedesktop.org"
     url = "https://github.com/Awareness10/conan_config"
-    topics = ("gstreamer", "multimedia", "video", "audio", "streaming")
+    topics = ("gstreamer", "multimedia", "video", "audio", "streaming", "rtsp")
     # Plugins are always shared modules, and GLib's type system needs one shared GLib.
     package_type = "shared-library"
     settings = "os", "arch", "compiler", "build_type"
@@ -102,7 +111,9 @@ class GstPluginsConan(ConanFile):
         basic_layout(self, src_folder="src")
 
     def requirements(self):
-        self.requires("glib/[>=2.76 <3]", transitive_headers=True)
+        # GStreamer's API is GLib's (GMainLoop, g_object_unref, ...): consumers
+        # include and link GLib themselves.
+        self.requires("glib/[>=2.76 <3]", transitive_headers=True, transitive_libs=True)
         self.requires("zlib/[>=1.2.11 <2]")
 
     def build_requirements(self):
