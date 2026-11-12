@@ -9,7 +9,7 @@ Example Conan 2 configuration repo for testing `conan config install`.
 | `global.conf` | Global conf (default profiles, Ninja generator, parallel downloads) |
 | `remotes.json` | Remotes: `conancenter` + a disabled placeholder internal remote |
 | `settings_user.yml` | Adds `os.Linux.distro` sub-setting |
-| `profiles/` | `base`, `linux-gcc-release`, `linux-gcc-debug`, `linux-clang-release`, `windows-msvc-release`, `windows-x64-clangcl` (cross from Linux, see below) |
+| `profiles/` | `base`, `linux-gcc-release`, `linux-gcc-debug`, `linux-clang-release`, `windows-msvc-release`, `windows-x64-clangcl` (cross from Linux, see below), `jetson-orin` (cross for Jetson, see [GStreamer](#gstreamer-gst-plugins)) |
 | `index/recipes/` | Recipes for the Windows cross toolchain (`xwin`, `msvc-sysroot`, `llvm`, `clang-cl-cross`, `wine`), `libxml2` (2.15.x, Linux + Windows) and `gst-plugins` (GStreamer 1.28.9, Linux), served as the `conan_config` remote |
 | `extensions/commands/recipes/cmd_index.py` | Adds `index/` as the `conan_config` local-recipes-index remote before every conan command + `conan recipes:index` |
 | `extensions/commands/wine/cmd_run.py` | `conan wine:run app.exe [args]`: runs a Windows program with the `wine` package (Linux) |
@@ -256,28 +256,88 @@ run environment (`conanrun`) points `GST_PLUGIN_SYSTEM_PATH_1_0` and
 `GST_PLUGIN_SCANNER_1_0` at the package, so a system GStreamer's plugins are never
 loaded by mistake. Add other plugin folders with `GST_PLUGIN_PATH_1_0`.
 
+### NVENC/NVDEC pipelines
+
+Starting points for `nvh264dec` and `nvh264enc` on Ada GPUs (RTX 40 series, RTX
+4000 Ada, ...). The same properties exist on `nvh265enc` and `nvav1enc`;
+`gst-inspect-1.0 nvh264enc` lists them all.
+
+**Low latency (live RTP/RTSP/WebRTC):**
+
+```bash
+... ! h264parse ! nvh264dec max-display-delay=0 discard-corrupted-frames=true \
+  ! 'video/x-raw(memory:CUDAMemory)' \
+  ! nvh264enc preset=p2 tune=ultra-low-latency rc-mode=cbr bitrate=8000 \
+      vbv-buffer-size=267 zerolatency=true bframes=0 gop-size=120 repeat-sequence-header=true \
+  ! h264parse config-interval=-1 ! rtph264pay ...
+```
+
+- `vbv-buffer-size` ≈ bitrate / fps (here 8000 / 30) is one frame of buffering:
+  even frame sizes, low latency. Raise it if scene changes look bad.
+- `repeat-sequence-header` and `config-interval=-1` let a receiver that joins
+  mid-stream start at the next keyframe.
+- `max-display-delay=0` stops the decoder from holding frames back.
+
+**Quality (files, VOD):**
+
+```bash
+... ! h264parse ! nvh264dec ! 'video/x-raw(memory:CUDAMemory)' \
+  ! nvh264enc preset=p6 tune=high-quality rc-mode=vbr const-quality=23 max-bitrate=20000 \
+      rc-lookahead=20 bframes=3 b-adapt=true spatial-aq=true temporal-aq=true \
+      multi-pass=two-pass-quarter gop-size=120 \
+  ! h264parse ! mp4mux ! filesink location=out.mp4
+```
+
+- `const-quality` works like x264's CRF: lower is better and bigger. For a target
+  size, use `bitrate` + `max-bitrate` instead.
+- Lookahead and B-frames add frames of delay, so leave them out of live pipelines.
+
+**What matters most**, measured with this package on an RTX 4070 Ti SUPER (1080p60
+H.264 transcode, synthetic test clip, `fakesink sync=false`):
+
+| Pipeline | fps |
+|---|---|
+| decode only | ~935 |
+| `preset=p1 tune=ultra-low-latency` | ~890 |
+| `preset=p4` | ~515 |
+| `preset=p7 tune=high-quality`, lookahead, B-frames, AQ, two-pass | ~290 |
+| 2 × `preset=p4` in parallel | ~925 total |
+
+- The preset sets the speed: p1 to p7 is about 3×.
+- One stream uses one NVENC engine. Ada cards with two engines (4070 Ti and up,
+  RTX 4000 Ada) only reach full throughput with two or more streams at once.
+- Keep frames in `memory:CUDAMemory` from decoder to encoder: no `videoconvert`
+  or `videoscale` in between. Scale on the GPU:
+  `cudaconvertscale ! 'video/x-raw(memory:CUDAMemory),width=1280,height=720'`. For one 1080p stream
+  the encoder is the limit and a round trip through system memory cost nothing
+  measurable. With 4K or many streams, it does.
+- Feed the encoder NV12. RGBA/BGRx are converted on the GPU; Y444 gives the
+  `high-4:4:4` profile.
+- If the input changes resolution, set `init-max-width`/`init-max-height` on
+  `nvh264dec` so it doesn't rebuild the decoder.
+- H.264 tops out at 4096×4096 here. Use `nvh265enc` or `nvav1enc` beyond that;
+  Ada's AV1 also gives better quality per bit.
+- `nvidia-smi dmon -s u` shows encoder/decoder load. An encoder near 100% means
+  a faster preset or more parallel streams.
+
 ### Cross-compiling for Jetson (L4T)
 
-The host profile needs a cross GCC and a sysroot that matches the target, e.g.
-the L4T sample rootfs or a Jetson's `/usr` and `/lib`:
+`profiles/jetson-orin` targets JetPack 6 (L4T R36: Ubuntu 22.04, glibc 2.35,
+GCC 11). It needs your cross GCC and a sysroot that matches the target, e.g. the
+L4T sample rootfs or a copy of a Jetson's `/usr` and `/lib`:
 
-```ini
-# profiles/jetson-orin (example)
-[settings]
-os=Linux
-arch=armv8
-compiler=gcc
-compiler.version=11
-compiler.libcxx=libstdc++11
-build_type=Release
-
-[buildenv]
-CC=aarch64-linux-gnu-gcc
-CXX=aarch64-linux-gnu-g++
-
-[conf]
-tools.build:sysroot=/opt/l4t/rootfs
+```bash
+export JETSON_TOOLCHAIN=/opt/toolchains/aarch64-gcc11   # the folder with bin/
+export JETSON_SYSROOT=/opt/l4t/rootfs
+export JETSON_CROSS_PREFIX=aarch64-linux-gnu-           # the default; NVIDIA's Bootlin
+                                                        # toolchain: aarch64-buildroot-linux-gnu-
+conan create index/recipes/gst-plugins/all --version 1.28.9 -pr:h jetson-orin --build=missing
 ```
+
+Ubuntu keeps libraries and some headers in multiarch folders
+(`aarch64-linux-gnu`). A Debian/Ubuntu cross GCC searches them; a generic
+toolchain (Bootlin, Arm GNU) doesn't. For one of those, uncomment the flags at the
+end of the profile.
 
 The X11/GL `.pc` files come from the sysroot, with their absolute paths moved into
 it. `PKG_CONFIG_SYSROOT_DIR` can't do this, because pkgconf would also prefix
