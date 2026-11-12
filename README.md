@@ -10,7 +10,7 @@ Example Conan 2 configuration repo for testing `conan config install`.
 | `remotes.json` | Remotes: `conancenter` + a disabled placeholder internal remote |
 | `settings_user.yml` | Adds `os.Linux.distro` sub-setting |
 | `profiles/` | `base`, `linux-gcc-release`, `linux-gcc-debug`, `linux-clang-release`, `windows-msvc-release`, `windows-x64-clangcl` (cross from Linux, see below) |
-| `index/recipes/` | Recipes for the Windows cross toolchain (`xwin`, `msvc-sysroot`, `llvm`, `clang-cl-cross`, `wine`) and `libxml2` (2.15.x, Linux + Windows), served as the `conan_config` remote |
+| `index/recipes/` | Recipes for the Windows cross toolchain (`xwin`, `msvc-sysroot`, `llvm`, `clang-cl-cross`, `wine`), `libxml2` (2.15.x, Linux + Windows) and `gst-plugins` (GStreamer 1.28.9, Linux), served as the `conan_config` remote |
 | `extensions/commands/recipes/cmd_index.py` | Adds `index/` as the `conan_config` local-recipes-index remote before every conan command + `conan recipes:index` |
 | `extensions/commands/wine/cmd_run.py` | `conan wine:run app.exe [args]`: runs a Windows program with the `wine` package (Linux) |
 | `extensions/hooks/hook_check_license.py` | `pre_export` hook warning on missing `license` |
@@ -196,3 +196,105 @@ already exists, and puts it first. This also covers the auto-sync, which replace
 
 Test it end to end with `uv run win64-cross-demo/run.py --accept-msvc-license`
 in the [conan-dev](../conan-dev) sandbox.
+
+## GStreamer: `gst-plugins`
+
+One package holds GStreamer core plus gst-plugins-base, -good and -bad, built from
+the four official tarballs on <https://gstreamer.freedesktop.org/src/>. They're
+unpacked as Meson subprojects of a two-line parent project, the way the GStreamer
+monorepo builds them: one configure, one build, and the modules always have the
+same version. Bumping it means a new `conandata.yml` entry with four URLs and hashes.
+
+```bash
+conan create index/recipes/gst-plugins/all --version 1.28.9 --build=missing
+```
+
+The build runs with `auto_features=disabled`, and the recipe lists the plugins to
+build (`PLUGINS` in the `conanfile.py`). pkg-config sees only Conan's packages and
+the system X11/GL modules the options ask for (`SYSTEM_PC`), so nothing turns on
+just because a library happens to be installed on the build machine. Without that
+limit, the `timecode` plugin quietly linked Arch's `libltc`. To add a plugin, add
+its Meson option to `PLUGINS`, plus a requirement if it needs one.
+
+| Option | Default | What it builds | Needs |
+|---|---|---|---|
+| `with_x11` | `True` | `ximagesink`, GL on X11/GLX | libX11, libX11-xcb, libxcb, libXext from the system |
+| `with_gl` | `True` | gst-gl (`glimagesink`, ...), CUDA ↔ GL interop | EGL, GL, GLES from the system (libglvnd) |
+| `with_nvcodec` | `True` | `nvh264enc`, `nvh265enc`, `nvh264dec`, ..., `cudaupload`, `cudaconvert` | nothing at build time |
+| `with_v4l2` | `True` | `v4l2src`, V4L2 encoders/decoders | kernel headers |
+
+GLib and zlib come from ConanCenter. GLib has to be shared (`glib/*:shared=True`
+is the default here), because the plugins and the libraries must share one GLib
+type system.
+
+**X11 and GL are always system libraries.** No Conan package provides them, and
+they're never packaged here. A native build (RHEL 9: `libX11-devel libXext-devel
+libxcb-devel libglvnd-devel`) uses the build machine's own. A cross build uses
+the ones in the sysroot. Either way, the target must have them at runtime: L4T
+and any desktop do. The recipe copies those `.pc` files, and the ones they
+require, next to Conan's. Conan's `pkgconf` searches only
+`/lib/pkgconfig:/share/pkgconfig`, so on RHEL 9 (`/usr/lib64`) it wouldn't find
+them on its own.
+
+`profiles/base` turns off GLib's introspection
+(`glib/*:tools.meson.mesontoolchain:extra_variables`). ConanCenter's glib leaves it
+on `auto`, so it uses the machine's gobject-introspection, whose scanner crashed on
+the system's gvfs modules. Profiles that don't include `base` (e.g. a cross
+profile) need the same line if gobject-introspection is installed on the build
+machine.
+
+**nvcodec** needs no CUDA SDK. It loads `libcuda.so` and `libnvidia-encode.so`
+at runtime, and its encoders and decoders register only when the NVIDIA driver
+provides those libraries. `gst-inspect-1.0 nvcodec` shows what registered.
+
+**Consumers:** `find_package(GStreamer)` gives one target per library, named after
+its pkg-config module: `GStreamer::gstreamer`, `GStreamer::app`, `GStreamer::video`,
+`GStreamer::gl`, and so on. PkgConfigDeps gives the upstream names
+(`gstreamer-1.0`, `gstreamer-video-1.0`, ...). The components come from the
+installed `.pc` files, so they follow the options with no hand-kept list. The
+run environment (`conanrun`) points `GST_PLUGIN_SYSTEM_PATH_1_0` and
+`GST_PLUGIN_SCANNER_1_0` at the package, so a system GStreamer's plugins are never
+loaded by mistake. Add other plugin folders with `GST_PLUGIN_PATH_1_0`.
+
+### Cross-compiling for Jetson (L4T)
+
+The host profile needs a cross GCC and a sysroot that matches the target, e.g.
+the L4T sample rootfs or a Jetson's `/usr` and `/lib`:
+
+```ini
+# profiles/jetson-orin (example)
+[settings]
+os=Linux
+arch=armv8
+compiler=gcc
+compiler.version=11
+compiler.libcxx=libstdc++11
+build_type=Release
+
+[buildenv]
+CC=aarch64-linux-gnu-gcc
+CXX=aarch64-linux-gnu-g++
+
+[conf]
+tools.build:sysroot=/opt/l4t/rootfs
+```
+
+The X11/GL `.pc` files come from the sysroot, with their absolute paths moved into
+it. `PKG_CONFIG_SYSROOT_DIR` can't do this, because pkgconf would also prefix
+Conan's own package paths. The build machine's x86_64 libraries can't leak in.
+`-Wl,-rpath-link` to the sysroot's multiarch dirs lets ld resolve libX11's own
+dependencies.
+
+If the sysroot has no X11 (or GL) development files, build with
+`-o "gst-plugins/*:with_x11=False"` (and `with_gl=False` if EGL/GLES are missing
+too). With `with_x11=False`, GL still works headless or on EGL
+(`gl_winsys=egl,surfaceless`).
+
+**Hardware encoding on Orin:** upstream nvcodec's NVENC/NVDEC elements are for
+desktop GPUs. Upstream compiles them out on Tegra builds that have NVMM support,
+and Orin's JetPack drivers don't provide `libnvidia-encode.so`. On Orin, the
+encoder is NVIDIA's `nvv4l2h264enc`/`nvv4l2h265enc` from L4T
+(`/usr/lib/aarch64-linux-gnu/gstreamer-1.0/libgstnvvideo4linux2.so`). It's an
+ordinary 1.x plugin that runs on this core:
+`GST_PLUGIN_PATH_1_0=/usr/lib/aarch64-linux-gnu/gstreamer-1.0`.
+`h264parse`, `rtph264pay`, `mpegtsmux` etc. still come from this package.

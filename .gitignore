@@ -2,5 +2,5 @@ __pycache__/
 *.py[oc]
 .ruff_cache/
 # conan create leaves these in each test_package/
-test_package/build/
+**/test_package/build/
 CMakeUserPresets.json
