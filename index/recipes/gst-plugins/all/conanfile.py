@@ -337,3 +337,12 @@ class GstPluginsConan(ConanFile):
                 self.package_folder, "bin", "gstreamer-1.0", "gst-plugin-scanner"
             ),
         )
+        # ConanCenter's glib is built with prefix "/", so GIO scans /lib/gio/modules
+        # (proxy resolvers, gvfs, dconf, TLS) as soon as it touches the network or
+        # a GFile. Those are the system's modules, built against the system GLib;
+        # on RHEL /lib is 32-bit and each one fails with "wrong ELF class". Point
+        # GIO at a folder of this package (empty) instead. Add system modules
+        # explicitly with GIO_EXTRA_MODULES, e.g. glib-networking for TLS.
+        self.runenv_info.define_path(
+            "GIO_MODULE_DIR", os.path.join(libdir, "gio", "modules")
+        )

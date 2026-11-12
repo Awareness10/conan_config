@@ -257,6 +257,14 @@ run environment (`conanrun`) points `GST_PLUGIN_SYSTEM_PATH_1_0` and
 `GST_PLUGIN_SCANNER_1_0` at the package, so a system GStreamer's plugins are never
 loaded by mistake. Add other plugin folders with `GST_PLUGIN_PATH_1_0`.
 
+It also sets `GIO_MODULE_DIR`, for the same reason. ConanCenter's glib is built
+with prefix `/`, so GIO otherwise scans `/lib/gio/modules` (proxy resolvers,
+gvfs, dconf, TLS) as soon as a program touches the network or a `GFile`. On Arch
+that loads the system's modules, built against the system GLib. On RHEL `/lib` is
+32-bit, and each module prints `wrong ELF class: ELFCLASS32`. System modules you
+do want go in `GIO_EXTRA_MODULES`, e.g. glib-networking for `rtsps://`:
+`GIO_EXTRA_MODULES=/usr/lib64/gio/modules` (RHEL) or `/usr/lib/gio/modules` (Arch).
+
 ### NVENC/NVDEC pipelines
 
 Starting points for `nvh264dec` and `nvh264enc` on Ada GPUs (RTX 40 series, RTX
